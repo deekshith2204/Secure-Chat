@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:8000';
+﻿const API_BASE = 'http://localhost:8000';
 
 const state = {
   email: '',
@@ -8,6 +8,8 @@ const state = {
 };
 
 const el = {
+  authView: document.getElementById('auth-view'),
+  chatView: document.getElementById('chat-view'),
   email: document.getElementById('email'),
   otp: document.getElementById('otp'),
   senderEmail: document.getElementById('sender-email'),
@@ -21,10 +23,12 @@ const el = {
   sendMessage: document.getElementById('send-message'),
   refreshMessages: document.getElementById('refresh-messages'),
   clearConsole: document.getElementById('clear-console'),
+  switchIdentity: document.getElementById('switch-identity'),
   themeToggle: document.querySelector('[data-theme-toggle]')
 };
 
 function setStatus(text, type = 'idle') {
+  if (!el.statusBadge) return;
   el.statusBadge.textContent = text;
   const colors = {
     idle: 'rgba(1,105,111,.12)',
@@ -33,6 +37,21 @@ function setStatus(text, type = 'idle') {
     warn: 'rgba(150,66,25,.15)'
   };
   el.statusBadge.style.background = colors[type] || colors.idle;
+}
+
+function showAuthView() {
+  el.authView.classList.remove('is-hidden');
+  el.chatView.classList.add('is-hidden');
+  setStatus('Ready', 'idle');
+}
+
+function showChatView() {
+  el.authView.classList.add('is-hidden');
+  el.chatView.classList.remove('is-hidden');
+  setStatus('Messaging ready', 'success');
+  if (!el.messages.children.length) {
+    el.messages.innerHTML = '<div class="message-card"><div class="plaintext">No messages loaded yet.</div></div>';
+  }
 }
 
 function arrayBufferToBase64(buffer) {
@@ -52,13 +71,11 @@ function base64ToArrayBuffer(base64) {
 async function generateKeyPair() {
   const keyPair = await crypto.subtle.generateKey(
     {
-      name: 'RSA-OAEP',
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: 'SHA-256'
+      name: 'ECDH',
+      namedCurve: 'P-256'
     },
     true,
-    ['encrypt', 'decrypt']
+    ['deriveKey']
   );
 
   const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
@@ -78,12 +95,22 @@ async function loadKeysFromStorage() {
   const priv = localStorage.getItem('securechat_private_jwk');
   if (!pub || !priv) return;
 
-  state.publicJwk = JSON.parse(pub);
-  state.privateJwk = JSON.parse(priv);
-  state.keyPair = {
-    publicKey: await crypto.subtle.importKey('jwk', state.publicJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['encrypt']),
-    privateKey: await crypto.subtle.importKey('jwk', state.privateJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['decrypt'])
-  };
+  try {
+    state.publicJwk = JSON.parse(pub);
+    state.privateJwk = JSON.parse(priv);
+    state.keyPair = {
+      publicKey: await crypto.subtle.importKey('jwk', state.publicJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []),
+      privateKey: await crypto.subtle.importKey('jwk', state.privateJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey'])
+    };
+  } catch {
+    localStorage.removeItem('securechat_public_jwk');
+    localStorage.removeItem('securechat_private_jwk');
+    localStorage.removeItem('securechat_email');
+    state.publicJwk = null;
+    state.privateJwk = null;
+    state.keyPair = null;
+    setStatus('Register again', 'warn');
+  }
 }
 
 async function api(path, options = {}) {
@@ -99,6 +126,7 @@ async function api(path, options = {}) {
 async function requestOtp() {
   const email = el.email.value.trim();
   if (!email) return alert('Enter email');
+  setStatus('Sending OTP...', 'idle');
   await api('/api/auth/request-otp', {
     method: 'POST',
     body: JSON.stringify({ email })
@@ -110,8 +138,12 @@ async function verifyAndRegister() {
   const email = el.email.value.trim();
   const code = el.otp.value.trim();
   if (!email || !code) return alert('Enter email and OTP');
-  if (!state.publicJwk) return alert('Generate keys first');
+  if (!state.publicJwk) {
+    setStatus('Generating keys...', 'idle');
+    await generateKeyPair();
+  }
 
+  setStatus('Verifying identity...', 'idle');
   await api('/api/auth/verify-otp', {
     method: 'POST',
     body: JSON.stringify({ email, code })
@@ -126,27 +158,45 @@ async function verifyAndRegister() {
   el.senderEmail.value = email;
   localStorage.setItem('securechat_email', email);
   setStatus('Registered', 'success');
+  showChatView();
+}
+
+async function deriveAesKey(peerPublicKeyJson) {
+  if (!state.keyPair?.privateKey) throw new Error('Private key unavailable');
+
+  const peerPublicKey = await crypto.subtle.importKey(
+    'jwk',
+    typeof peerPublicKeyJson === 'string' ? JSON.parse(peerPublicKeyJson) : peerPublicKeyJson,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    []
+  );
+
+  return crypto.subtle.deriveKey(
+    { name: 'ECDH', public: peerPublicKey },
+    state.keyPair.privateKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
 }
 
 async function encryptForRecipient(plaintext, recipientPublicKeyJson) {
-  const recipientPublicKey = await crypto.subtle.importKey(
-    'jwk',
-    JSON.parse(recipientPublicKeyJson),
-    { name: 'RSA-OAEP', hash: 'SHA-256' },
-    true,
-    ['encrypt']
-  );
-
+  const aesKey = await deriveAesKey(recipientPublicKeyJson);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(plaintext);
-  const ciphertext = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, recipientPublicKey, encoded);
-  return arrayBufferToBase64(ciphertext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, encoded);
+  return {
+    ciphertext: arrayBufferToBase64(ciphertext),
+    iv: arrayBufferToBase64(iv)
+  };
 }
 
-async function decryptMessage(ciphertextBase64) {
-  if (!state.keyPair?.privateKey) throw new Error('Private key unavailable');
+async function decryptMessage(ciphertextBase64, ivBase64, senderPublicKeyJson) {
+  const aesKey = await deriveAesKey(senderPublicKeyJson);
   const plaintextBuffer = await crypto.subtle.decrypt(
-    { name: 'RSA-OAEP' },
-    state.keyPair.privateKey,
+    { name: 'AES-GCM', iv: base64ToArrayBuffer(ivBase64) },
+    aesKey,
     base64ToArrayBuffer(ciphertextBase64)
   );
   return new TextDecoder().decode(plaintextBuffer);
@@ -158,16 +208,18 @@ async function sendMessage() {
   const message = el.messageText.value.trim();
   if (!sender || !recipient || !message) return alert('Complete sender, recipient, message');
 
+  if (!state.publicJwk) return alert('Generate and register keys first');
+
   const keyLookup = await api(`/api/users/${encodeURIComponent(recipient)}/public-key`);
-  const ciphertext = await encryptForRecipient(message, keyLookup.public_key);
+  const encrypted = await encryptForRecipient(message, keyLookup.public_key);
 
   await api('/api/messages/send', {
     method: 'POST',
     body: JSON.stringify({
       sender_email: sender,
       recipient_email: recipient,
-      ciphertext,
-      iv: 'rsa-oaep-no-iv',
+      ciphertext: encrypted.ciphertext,
+      iv: encrypted.iv,
       sender_public_key: JSON.stringify(state.publicJwk)
     })
   });
@@ -205,28 +257,34 @@ async function fetchMessages() {
 
   for (const msg of messages) {
     try {
-      const plaintext = await decryptMessage(msg.ciphertext);
+      const plaintext = await decryptMessage(msg.ciphertext, msg.iv, msg.sender_public_key);
       el.messages.appendChild(renderMessageCard(msg, plaintext));
     } catch {
-      el.messages.appendChild(renderMessageCard(msg, '[Decryption failed — wrong private key or tampered data]'));
+      el.messages.appendChild(renderMessageCard(msg, '[Decryption failed - wrong private key or tampered data]'));
     }
   }
   setStatus('Messages decrypted locally', 'success');
 }
 
 function clearOutput() {
-  el.messages.innerHTML = '';
+  el.messages.innerHTML = '<div class="message-card"><div class="plaintext">No messages loaded yet.</div></div>';
   setStatus('Idle', 'idle');
+}
+
+function switchIdentity() {
+  showAuthView();
+  el.otp.value = '';
+  el.email.focus();
 }
 
 function initTheme() {
   let theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', theme);
-  el.themeToggle.textContent = theme === 'dark' ? '☀' : '☾';
+  el.themeToggle.textContent = theme === 'dark' ? 'Light' : 'Dark';
   el.themeToggle.addEventListener('click', () => {
     theme = theme === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', theme);
-    el.themeToggle.textContent = theme === 'dark' ? '☀' : '☾';
+    el.themeToggle.textContent = theme === 'dark' ? 'Light' : 'Dark';
   });
 }
 
@@ -238,6 +296,7 @@ async function bootstrap() {
     state.email = savedEmail;
     el.email.value = savedEmail;
     el.senderEmail.value = savedEmail;
+    if (state.keyPair) showChatView();
   }
 
   el.requestOtp.addEventListener('click', () => requestOtp().catch(err => { alert(err.message); setStatus('OTP failed', 'error'); }));
@@ -246,6 +305,7 @@ async function bootstrap() {
   el.sendMessage.addEventListener('click', () => sendMessage().catch(err => { alert(err.message); setStatus('Send failed', 'error'); }));
   el.refreshMessages.addEventListener('click', () => fetchMessages().catch(err => { alert(err.message); setStatus('Fetch failed', 'error'); }));
   el.clearConsole.addEventListener('click', clearOutput);
+  el.switchIdentity.addEventListener('click', switchIdentity);
 }
 
 bootstrap();
