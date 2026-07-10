@@ -4,8 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SecureChat</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://api.fontshare.com">
   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -22,94 +21,96 @@
       </svg>
       <div>
         <h1>SecureChat</h1>
-        <p>End-to-end encrypted browser messaging</p>
+        <p>End-to-end encrypted messaging</p>
       </div>
     </div>
-    <button class="theme-toggle" data-theme-toggle aria-label="Switch theme">☾</button>
+    <div class="topbar-actions">
+      <span id="status-badge" class="badge">Ready</span>
+      <button class="theme-toggle" data-theme-toggle aria-label="Switch theme">Dark</button>
+    </div>
   </header>
 
   <main id="main" class="app-shell">
-    <section class="panel auth-panel">
-      <div class="panel-header">
-        <h2>Register identity</h2>
-        <p>Email-anchored identity with OTP verification and local key generation.</p>
-      </div>
-
-      <form id="auth-form" class="stack">
-        <label>
-          Email address
-          <input id="email" type="email" placeholder="alice@example.com" required>
-        </label>
-        <div class="row">
-          <button type="button" id="request-otp" class="btn btn-secondary">Request OTP</button>
-          <button type="button" id="generate-keys" class="btn btn-ghost">Generate Keys</button>
+    <section id="auth-view" class="auth-view">
+      <div class="auth-copy">
+        <p class="eyebrow">Private by design</p>
+        <h2>Verify your email, then start a secure conversation.</h2>
+        <p class="lead">Your browser creates the keys. The server stores public keys and encrypted messages only.</p>
+        <div class="trust-strip" aria-label="Security highlights">
+          <span>OTP identity</span>
+          <span>Local private key</span>
+          <span>AES-GCM messages</span>
         </div>
-        <label>
-          OTP code
-          <input id="otp" type="text" maxlength="6" placeholder="123456">
-        </label>
-        <button type="button" id="verify-register" class="btn btn-primary">Verify & Register</button>
-      </form>
-
-      <div class="security-note">
-        <h3>Security model</h3>
-        <ul>
-          <li>Private key stays only in this browser.</li>
-          <li>Server stores only public keys, OTPs, and ciphertext.</li>
-          <li>Messages are encrypted client-side using Web Crypto API.</li>
-        </ul>
       </div>
+
+      <section class="auth-card" aria-labelledby="auth-title">
+        <div class="panel-header compact">
+          <h2 id="auth-title">Register identity</h2>
+          <p>Use the OTP from email or local dev terminal.</p>
+        </div>
+
+        <form id="auth-form" class="stack">
+          <label>
+            Email address
+            <input id="email" type="email" placeholder="alice@example.com" autocomplete="email" required>
+          </label>
+          <button type="button" id="request-otp" class="btn btn-secondary">Request OTP</button>
+          <label>
+            OTP code
+            <input id="otp" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+          </label>
+          <div class="row">
+            <button type="button" id="generate-keys" class="btn btn-ghost">Generate keys</button>
+            <button type="button" id="verify-register" class="btn btn-primary">Verify and continue</button>
+          </div>
+        </form>
+      </section>
     </section>
 
-    <section class="panel chat-panel">
-      <div class="panel-header">
-        <h2>Encrypted messaging</h2>
-        <p>Encrypt before send, decrypt after fetch.</p>
-      </div>
-
-      <div class="stack">
+    <section id="chat-view" class="chat-view is-hidden" aria-labelledby="chat-title">
+      <aside class="account-panel">
+        <p class="eyebrow">Active identity</p>
+        <h2 id="chat-title">Messaging</h2>
         <label>
           Logged in as
           <input id="sender-email" type="email" readonly>
         </label>
-        <label>
-          Recipient email
-          <input id="recipient-email" type="email" placeholder="bob@example.com">
-        </label>
-        <label>
-          Message
-          <textarea id="message-text" rows="5" placeholder="Type a confidential message..."></textarea>
-        </label>
-        <button id="send-message" class="btn btn-primary">Encrypt & Send</button>
-        <div class="row">
-          <button id="refresh-messages" class="btn btn-secondary">Fetch Messages</button>
-          <button id="clear-console" class="btn btn-ghost">Clear Output</button>
-        </div>
-      </div>
+        <button type="button" id="switch-identity" class="btn btn-ghost">Switch identity</button>
+      </aside>
 
-      <div class="messages-wrap">
+      <section class="conversation-panel">
         <div class="messages-header">
-          <h3>Inbox</h3>
-          <span id="status-badge" class="badge">Idle</span>
+          <div>
+            <p class="eyebrow">Inbox</p>
+            <h2>Encrypted messages</h2>
+          </div>
+          <button id="refresh-messages" class="btn btn-secondary">Fetch messages</button>
         </div>
-        <div id="messages" class="messages"></div>
-      </div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+      </section>
+
+      <section class="composer-panel">
+        <div class="panel-header compact">
+          <h2>New message</h2>
+          <p>Recipient must be registered first.</p>
+        </div>
+        <div class="stack">
+          <label>
+            Recipient email
+            <input id="recipient-email" type="email" placeholder="bob@example.com" autocomplete="email">
+          </label>
+          <label>
+            Message
+            <textarea id="message-text" rows="7" placeholder="Type a confidential message..."></textarea>
+          </label>
+          <div class="row align-end">
+            <button id="clear-console" class="btn btn-ghost">Clear inbox</button>
+            <button id="send-message" class="btn btn-primary">Encrypt and send</button>
+          </div>
+        </div>
+      </section>
     </section>
   </main>
-
-  <section class="panel api-panel">
-    <div class="panel-header">
-      <h2>Project demo notes</h2>
-      <p>Default API base is <code>http://localhost:8000</code>. Update <code>API_BASE</code> in <code>app.js</code> for Azure deployment.</p>
-    </div>
-    <ol class="demo-list">
-      <li>Open the app in two browsers or profiles.</li>
-      <li>Register two users with different emails.</li>
-      <li>Generate keys in each browser.</li>
-      <li>Send encrypted messages between them.</li>
-      <li>Fetch messages and observe local decryption only in the receiver browser.</li>
-    </ol>
-  </section>
 
   <script src="./app.js" defer></script>
 </body>
