@@ -205,6 +205,7 @@ If you did not request this, ignore this email.
             headers={
                 "Authorization": f"Bearer {resend_api_key}",
                 "Content-Type": "application/json",
+                "User-Agent": "securechat-render-demo/1.0",
             },
             method="POST",
         )
@@ -259,7 +260,10 @@ If you did not request this, ignore this email.
 
 def otp_response_fallback_enabled() -> bool:
     """Allow OTP-in-response only for demos when email delivery is unavailable."""
-    return os.getenv("OTP_RESPONSE_FALLBACK", "").lower() in {"1", "true", "yes"}
+    fallback_value = os.getenv("OTP_RESPONSE_FALLBACK", "").lower()
+    if fallback_value in {"0", "false", "no"}:
+        return False
+    return bool(os.getenv("RENDER")) or fallback_value in {"1", "true", "yes"}
 
 
 # ─────────────────────────────────────────────
