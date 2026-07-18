@@ -2,6 +2,10 @@
 
 SecureChat is a web chat application built to demonstrate end-to-end encrypted messaging. The main idea is simple: the browser handles identity keys, encryption, and decryption, while the server only verifies users, stores public keys, and relays encrypted messages.
 
+## Live Deployment
+
+Access the deployed project here: **Add your Render deployment URL here**
+
 ## Group Members
 
 1. Thadvai Deekshith (20087999)
