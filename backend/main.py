@@ -128,25 +128,25 @@ def get_db():
 # ─────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
-    email: str
+    email: EmailStr
     public_key: str          # JWK JSON string from Web Crypto API
 
 class OTPRequest(BaseModel):
-    email: str
+    email: EmailStr
 
 class OTPVerifyRequest(BaseModel):
-    email: str
+    email: EmailStr
     code: str
 
 class SendMessageRequest(BaseModel):
-    sender_email: str
-    recipient_email: str
+    sender_email: EmailStr
+    recipient_email: EmailStr
     ciphertext: str          # Base64 AES-GCM ciphertext
     iv: str                  # Base64 12-byte IV
     sender_public_key: str   # Sender's public key (for recipient to verify)
 
 class PublicKeyResponse(BaseModel):
-    email: str
+    email: EmailStr
     public_key: str
 
 
@@ -258,14 +258,6 @@ If you did not request this, ignore this email.
         socket.getaddrinfo = original_getaddrinfo
 
 
-def otp_response_fallback_enabled() -> bool:
-    """Allow OTP-in-response only for demos when email delivery is unavailable."""
-    fallback_value = os.getenv("OTP_RESPONSE_FALLBACK", "").lower()
-    if fallback_value in {"0", "false", "no"}:
-        return False
-    return bool(os.getenv("RENDER")) or fallback_value in {"1", "true", "yes"}
-
-
 # ─────────────────────────────────────────────
 # API Routes
 # ─────────────────────────────────────────────
@@ -290,17 +282,7 @@ def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
     db.add(otp)
     db.commit()
 
-    try:
-        send_otp_email(req.email, code)
-    except HTTPException:
-        if not otp_response_fallback_enabled():
-            raise
-        print(f"[DEMO MODE] Email failed; returning OTP in response for {req.email}: {code}")
-        return {
-            "message": "Email delivery failed, demo OTP returned in response.",
-            "otp": code,
-            "delivery": "response_fallback"
-        }
+    send_otp_email(req.email, code)
 
     return {"message": "OTP sent. Check your email."}
 

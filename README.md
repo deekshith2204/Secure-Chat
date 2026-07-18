@@ -216,14 +216,15 @@ Required Render environment variables:
 
 ```env
 DATABASE_URL=sqlite:///./securechat.db
-OTP_RESPONSE_FALLBACK=true
 RESEND_API_KEY=your_resend_api_key
 RESEND_FROM=SecureChat <onboarding@resend.dev>
 ```
 
 For a quick demo, SQLite is acceptable. For a more reliable deployment, use PostgreSQL and set `DATABASE_URL` to the PostgreSQL connection string provided by the hosting platform.
 
-`OTP_RESPONSE_FALLBACK=true` is for demo reliability only. If email delivery fails on Render, the OTP is returned to the browser and filled into the OTP box. For production, disable this and use a reliable provider such as Resend with a verified sending domain.
+OTP codes are never returned to the browser. If email delivery fails, the API returns an error and registration cannot continue. Invalid email formats are rejected before an OTP is created.
+
+With Resend's testing sender, emails can usually be sent only to the email address used for the Resend account. To send OTPs to other recipients, verify a domain in Resend and use a sender address from that domain.
 
 Important deployment note: SQLite on cloud platforms may be temporary. If the service restarts or redeploys, local SQLite data can be lost. PostgreSQL is recommended for production or final demonstration.
 

@@ -46,6 +46,11 @@ def test_request_otp(monkeypatch):
     assert res.status_code == 200
     assert "OTP sent" in res.json()["message"]
 
+def test_request_otp_rejects_invalid_email():
+    """OTP should not be created for invalid email addresses."""
+    res = client.post("/api/auth/request-otp", json={"email": "not-an-email"})
+    assert res.status_code == 422
+
 def test_verify_invalid_otp():
     """Invalid OTP must be rejected."""
     res = client.post("/api/auth/verify-otp", json={"email": "test@example.com", "code": "000000"})
