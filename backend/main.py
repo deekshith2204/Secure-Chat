@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timedelta
+from pathlib import Path
 import string
 import secrets
 import os
@@ -17,7 +18,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
+
+load_dotenv(BASE_DIR / ".env")
 
 # ─────────────────────────────────────────────
 # Database Setup (SQLite for local / PostgreSQL for Azure)
@@ -366,5 +371,5 @@ def health():
 # ─────────────────────────────────────────────
 # Serve Frontend (optional — for combined deployment)
 # ─────────────────────────────────────────────
-if os.path.exists("../frontend"):
-    app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
+if FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

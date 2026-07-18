@@ -183,6 +183,66 @@ SMTP_PASS=your_16_character_app_password
 
 Do not use your normal Gmail password. Gmail requires an app password when SMTP login is used.
 
+## Deployment
+
+### Recommended Option: Render
+
+Render is the simplest deployment option for this project because the FastAPI backend can also serve the frontend files. The project includes a `render.yaml` blueprint for this.
+
+Before deploying:
+
+1. Push this project to GitHub.
+2. Make sure `.env` is not committed.
+3. In Render, create a new **Blueprint** or **Web Service** from the GitHub repository.
+4. Render will use:
+
+```text
+Build command: pip install -r backend/requirements.txt
+Start command: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+Python version: 3.12.11
+```
+
+Required Render environment variables:
+
+```env
+DATABASE_URL=sqlite:///./securechat.db
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_16_character_gmail_app_password
+```
+
+For a quick demo, SQLite is acceptable. For a more reliable deployment, use PostgreSQL and set `DATABASE_URL` to the PostgreSQL connection string provided by the hosting platform.
+
+Important deployment note: SQLite on cloud platforms may be temporary. If the service restarts or redeploys, local SQLite data can be lost. PostgreSQL is recommended for production or final demonstration.
+
+After deployment, Render gives a public URL similar to:
+
+```text
+https://securechat.onrender.com
+```
+
+Use that URL to open the app. The API docs will be available at:
+
+```text
+https://securechat.onrender.com/api/docs
+```
+
+### Vercel Option
+
+Vercel is excellent for frontend-only apps and serverless functions, but this project is a better fit for Render because it uses a FastAPI backend, SMTP, and database state. Vercel can still work, but it would require adapting the backend into Vercel's Python serverless structure and using an external database.
+
+### AWS Option
+
+AWS is powerful but more complex. Good AWS options include:
+
+- AWS Elastic Beanstalk for the FastAPI app
+- AWS App Runner for containerized deployment
+- Amazon RDS PostgreSQL for the database
+- AWS SES for production email delivery
+
+AWS is recommended only if the project needs a more advanced cloud architecture. For a student demo, Render is faster and easier.
+
 ## Demo Steps
 
 1. Start the backend server.
