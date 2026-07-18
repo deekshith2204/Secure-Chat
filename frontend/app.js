@@ -127,10 +127,14 @@ async function requestOtp() {
   const email = el.email.value.trim();
   if (!email) return alert('Enter email');
   setStatus('Sending OTP...', 'idle');
-  await api('/api/auth/request-otp', {
+  const result = await api('/api/auth/request-otp', {
     method: 'POST',
     body: JSON.stringify({ email })
   });
+  if (result.otp) {
+    el.otp.value = result.otp;
+    alert(`Demo OTP: ${result.otp}`);
+  }
   setStatus('OTP sent', 'success');
 }
 

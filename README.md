@@ -39,7 +39,7 @@ The server does not store:
 | Backend | Python, FastAPI | REST API for OTP, registration, public key lookup, and encrypted message relay |
 | Database | SQLite locally, PostgreSQL-ready through `DATABASE_URL` | Stores users, OTPs, and encrypted messages |
 | ORM | SQLAlchemy | Database models and queries |
-| Email | SMTP with Gmail app password or console dev mode | Sends OTP codes for email verification |
+| Email | Resend API for Render, SMTP or console dev mode locally | Sends OTP codes for email verification |
 | API Docs | FastAPI Swagger UI | Interactive backend documentation at `/api/docs` |
 | Deployment Target | Render Web Service | Hosts the FastAPI backend and frontend together |
 
@@ -184,7 +184,14 @@ SMTP_PASS=your_16_character_app_password
 
 Do not use your normal Gmail password. Gmail requires an app password when SMTP login is used.
 
-If Render logs show `[Errno 101] Network is unreachable` while sending OTP, Gmail SMTP may be resolving to IPv6 first. The backend forces SMTP DNS resolution to IPv4 before connecting, which avoids this Render networking issue.
+For Render deployment, use Resend instead of Gmail SMTP because Render may timeout on raw SMTP connections. Create a Resend API key and add:
+
+```env
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM=SecureChat <onboarding@resend.dev>
+```
+
+For a real public app, verify your own domain in Resend and use an address from that domain for `RESEND_FROM`.
 
 ## Deployment
 
@@ -209,13 +216,14 @@ Required Render environment variables:
 
 ```env
 DATABASE_URL=sqlite:///./securechat.db
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_16_character_gmail_app_password
+OTP_RESPONSE_FALLBACK=true
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM=SecureChat <onboarding@resend.dev>
 ```
 
 For a quick demo, SQLite is acceptable. For a more reliable deployment, use PostgreSQL and set `DATABASE_URL` to the PostgreSQL connection string provided by the hosting platform.
+
+`OTP_RESPONSE_FALLBACK=true` is for demo reliability only. If email delivery fails on Render, the OTP is returned to the browser and filled into the OTP box. For production, disable this and use a reliable provider such as Resend with a verified sending domain.
 
 Important deployment note: SQLite on cloud platforms may be temporary. If the service restarts or redeploys, local SQLite data can be lost. PostgreSQL is recommended for production or final demonstration.
 

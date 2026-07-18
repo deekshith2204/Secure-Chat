@@ -15,6 +15,9 @@ import secrets
 import os
 import smtplib
 import socket
+import json
+import urllib.error
+import urllib.request
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
@@ -174,6 +177,8 @@ def send_otp_email(email: str, code: str):
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER", "")
     smtp_pass = os.getenv("SMTP_PASS", "")
+    resend_api_key = os.getenv("RESEND_API_KEY", "")
+    resend_from = os.getenv("RESEND_FROM", "SecureChat <onboarding@resend.dev>")
 
     subject = "SecureChat — Your verification code"
     body = f"""
@@ -187,11 +192,41 @@ If you did not request this, ignore this email.
 — SecureChat Security Team
     """
 
+    if resend_api_key:
+        payload = {
+            "from": resend_from,
+            "to": [email],
+            "subject": subject,
+            "text": body,
+        }
+        request = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                if response.status >= 400:
+                    raise HTTPException(status_code=500, detail="Failed to send OTP email.")
+            print(f"[EMAIL SENT] OTP sent to {email} via Resend")
+            return
+        except urllib.error.HTTPError as e:
+            details = e.read().decode("utf-8", errors="replace")
+            print(f"[EMAIL ERROR] Resend failed for {email}: {e.code} {details}")
+            raise HTTPException(status_code=500, detail="Failed to send OTP email.")
+        except Exception as e:
+            print(f"[EMAIL ERROR] Resend failed for {email}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to send OTP email.")
+
     if not smtp_host:
         if os.getenv("RENDER"):
             raise HTTPException(
                 status_code=500,
-                detail="SMTP is not configured on Render. Add SMTP_HOST, SMTP_USER, and SMTP_PASS environment variables."
+                detail="Email is not configured on Render. Add RESEND_API_KEY, or add SMTP_HOST, SMTP_USER, and SMTP_PASS."
             )
         print(f"\n[DEV MODE] OTP for {email}: {code}\n")
         return
@@ -222,6 +257,11 @@ If you did not request this, ignore this email.
         socket.getaddrinfo = original_getaddrinfo
 
 
+def otp_response_fallback_enabled() -> bool:
+    """Allow OTP-in-response only for demos when email delivery is unavailable."""
+    return os.getenv("OTP_RESPONSE_FALLBACK", "").lower() in {"1", "true", "yes"}
+
+
 # ─────────────────────────────────────────────
 # API Routes
 # ─────────────────────────────────────────────
@@ -246,7 +286,18 @@ def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
     db.add(otp)
     db.commit()
 
-    send_otp_email(req.email, code)
+    try:
+        send_otp_email(req.email, code)
+    except HTTPException:
+        if not otp_response_fallback_enabled():
+            raise
+        print(f"[DEMO MODE] Email failed; returning OTP in response for {req.email}: {code}")
+        return {
+            "message": "Email delivery failed, demo OTP returned in response.",
+            "otp": code,
+            "delivery": "response_fallback"
+        }
+
     return {"message": "OTP sent. Check your email."}
 
 
@@ -383,7 +434,10 @@ def health():
         "status": "ok",
         "service": "SecureChat API",
         "e2e_encrypted": True,
-        "smtp_configured": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASS")),
+        "email_configured": bool(
+            os.getenv("RESEND_API_KEY")
+            or (os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASS"))
+        ),
     }
 
 

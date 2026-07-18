@@ -28,11 +28,11 @@ Set these environment variables in Render:
 ```env
 PYTHON_VERSION=3.12.11
 DATABASE_URL=sqlite:///./securechat.db
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_gmail_app_password
+RESEND_API_KEY=your_resend_api_key
+RESEND_FROM=SecureChat <onboarding@resend.dev>
 ```
+
+Use Gmail SMTP for local testing only. Render may timeout on raw SMTP, so the deployed app should use the Resend HTTPS API.
 
 ## Security Notes
 

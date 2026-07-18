@@ -10,6 +10,12 @@ services:
         value: 3.12.11
       - key: DATABASE_URL
         value: sqlite:///./securechat.db
+      - key: OTP_RESPONSE_FALLBACK
+        value: "true"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        value: SecureChat <onboarding@resend.dev>
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
