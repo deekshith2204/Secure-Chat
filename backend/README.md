@@ -13,20 +13,25 @@ uvicorn main:app --reload --port 8000
 
 Visit: http://localhost:8000/api/docs
 
-## Azure Deployment
+## Render Deployment
 
 ```bash
-# 1. Create Azure App Service (Python 3.11)
-az webapp create --name securechat-api --resource-group securechat-rg \
-  --plan securechat-plan --runtime "PYTHON:3.11"
+# Build command
+pip install -r backend/requirements.txt
 
-# 2. Set environment variables
-az webapp config appsettings set --name securechat-api \
-  --resource-group securechat-rg \
-  --settings DATABASE_URL="postgresql://..." SMTP_HOST="..." ...
+# Start command
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
 
-# 3. Deploy via GitHub Actions (see .github/workflows/)
-git push origin main
+Set these environment variables in Render:
+
+```env
+PYTHON_VERSION=3.12.11
+DATABASE_URL=sqlite:///./securechat.db
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_gmail_app_password
 ```
 
 ## Security Notes

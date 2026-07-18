@@ -41,7 +41,7 @@ The server does not store:
 | ORM | SQLAlchemy | Database models and queries |
 | Email | SMTP with Gmail app password or console dev mode | Sends OTP codes for email verification |
 | API Docs | FastAPI Swagger UI | Interactive backend documentation at `/api/docs` |
-| Deployment Target | Azure App Service and Azure Database for PostgreSQL | Cloud hosting option |
+| Deployment Target | Render Web Service | Hosts the FastAPI backend and frontend together |
 
 ## Main Workflow
 
@@ -279,7 +279,7 @@ node --check frontend\app.js
 - Add stronger session authentication after OTP verification.
 - Add production CORS settings.
 - Add Content Security Policy headers.
-- Add deployment configuration for Azure.
+- Add PostgreSQL for persistent Render production storage.
 
 ## Project Link
 

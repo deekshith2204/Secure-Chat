@@ -1,0 +1,28 @@
+name: Render Deployment Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-render-config:
+    name: Validate Render config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check required deployment files
+        run: |
+          test -f render.yaml
+          test -f .python-version
+          test -f backend/requirements.txt
+          test -f backend/__init__.py
+
+      - name: Show Render commands
+        run: |
+          echo "Build command: pip install -r backend/requirements.txt"
+          echo "Start command: uvicorn backend.main:app --host 0.0.0.0 --port \$PORT"

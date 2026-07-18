@@ -25,7 +25,7 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 load_dotenv(BASE_DIR / ".env")
 
 # ─────────────────────────────────────────────
-# Database Setup (SQLite for local / PostgreSQL for Azure)
+# Database Setup (SQLite for local / PostgreSQL for cloud deployment)
 # ─────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./securechat.db")
 
@@ -101,7 +101,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # Restrict to your Azure domain in production
+    allow_origins=["*"],    # Restrict to your deployed frontend domain in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -216,7 +216,7 @@ If you did not request this, ignore this email.
 def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
     """
     Sends a 6-digit OTP to the provided email.
-    Rate limiting should be applied at the reverse proxy / Azure API Gateway level.
+    Rate limiting should be applied at the reverse proxy or hosting platform level.
     Security note: identical response for known/unknown emails (prevents enumeration).
     """
     code = generate_otp()
