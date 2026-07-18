@@ -187,7 +187,11 @@ If you did not request this, ignore this email.
     """
 
     if not smtp_host:
-        # Dev mode: print to terminal
+        if os.getenv("RENDER"):
+            raise HTTPException(
+                status_code=500,
+                detail="SMTP is not configured on Render. Add SMTP_HOST, SMTP_USER, and SMTP_PASS environment variables."
+            )
         print(f"\n[DEV MODE] OTP for {email}: {code}\n")
         return
 
@@ -203,6 +207,7 @@ If you did not request this, ignore this email.
             server.starttls()
             server.login(smtp_user, smtp_pass)
             server.sendmail(smtp_user, email, msg.as_string())
+            print(f"[EMAIL SENT] OTP sent to {email}")
     except Exception as e:
         print(f"[EMAIL ERROR] Failed to send OTP to {email}: {e}")
         raise HTTPException(status_code=500, detail="Failed to send OTP email.")
@@ -365,7 +370,12 @@ def get_messages(email: str, db: Session = Depends(get_db)):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "SecureChat API", "e2e_encrypted": True}
+    return {
+        "status": "ok",
+        "service": "SecureChat API",
+        "e2e_encrypted": True,
+        "smtp_configured": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASS")),
+    }
 
 
 # ─────────────────────────────────────────────
