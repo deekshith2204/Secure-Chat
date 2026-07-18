@@ -14,6 +14,7 @@ import string
 import secrets
 import os
 import smtplib
+import socket
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
@@ -196,6 +197,12 @@ If you did not request this, ignore this email.
         return
 
     try:
+        original_getaddrinfo = socket.getaddrinfo
+
+        def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
+            return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+        socket.getaddrinfo = getaddrinfo_ipv4
         msg = MIMEMultipart()
         msg["From"] = smtp_user
         msg["To"] = email
@@ -211,6 +218,8 @@ If you did not request this, ignore this email.
     except Exception as e:
         print(f"[EMAIL ERROR] Failed to send OTP to {email}: {e}")
         raise HTTPException(status_code=500, detail="Failed to send OTP email.")
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
 
 
 # ─────────────────────────────────────────────

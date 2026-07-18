@@ -149,6 +149,7 @@ messages(id, sender_email, recipient_email, ciphertext, iv, sender_public_key, d
 | XSS in frontend | Malicious script could read browser keys or messages. | Use strict input handling, avoid unsafe HTML insertion, add Content Security Policy, and sanitize displayed content. |
 | Open CORS in development | `allow_origins=["*"]` is convenient locally but too broad for production. | Restrict CORS to the deployed frontend domain in production. |
 | SMTP credential exposure | If `.env` is committed, email credentials could leak. | Keep `.env` out of Git, use `.env.example`, and rotate app passwords if exposed. |
+| SMTP IPv6 connectivity on Render | Gmail SMTP may resolve to IPv6 first, causing `[Errno 101] Network is unreachable` on Render. | Force SMTP DNS resolution to IPv4 before connecting, or switch to an HTTPS email API such as Resend or SendGrid. |
 
 ## How the Current Implementation Handles Gaps
 
@@ -182,6 +183,8 @@ SMTP_PASS=your_16_character_app_password
 ```
 
 Do not use your normal Gmail password. Gmail requires an app password when SMTP login is used.
+
+If Render logs show `[Errno 101] Network is unreachable` while sending OTP, Gmail SMTP may be resolving to IPv6 first. The backend forces SMTP DNS resolution to IPv4 before connecting, which avoids this Render networking issue.
 
 ## Deployment
 
