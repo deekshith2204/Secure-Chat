@@ -13,13 +13,7 @@ from pathlib import Path
 import string
 import secrets
 import os
-import smtplib
-import socket
-import json
-import urllib.error
-import urllib.request
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import httpx
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -170,97 +164,51 @@ def has_recent_verified_otp(email: str, db: Session) -> bool:
 
 def send_otp_email(email: str, code: str):
     """
-    Send OTP via SMTP. Configure SMTP_* env vars.
-    Fallback: prints to console (dev mode).
+    Send OTP via Twilio SendGrid. Configure SENDGRID_API_KEY and SENDGRID_FROM.
+    Fallback: prints to console when SendGrid is not configured.
     """
-    smtp_host = os.getenv("SMTP_HOST", "")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER", "")
-    smtp_pass = os.getenv("SMTP_PASS", "")
-    resend_api_key = os.getenv("RESEND_API_KEY", "")
-    resend_from = os.getenv("RESEND_FROM", "SecureChat <onboarding@resend.dev>")
+    sendgrid_api_key = os.getenv("SENDGRID_API_KEY", "")
+    sendgrid_from = os.getenv("SENDGRID_FROM", "")
 
-    subject = "SecureChat — Your verification code"
-    body = f"""
-Your SecureChat OTP verification code is:
-
-  {code}
-
-This code expires in 10 minutes. Do not share it with anyone.
-
-If you did not request this, ignore this email.
-— SecureChat Security Team
-    """
-
-    if resend_api_key:
-        payload = {
-            "from": resend_from,
-            "to": [email],
-            "subject": subject,
-            "text": body,
-        }
-        request = urllib.request.Request(
-            "https://api.resend.com/emails",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {resend_api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "securechat-render-demo/1.0",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                if response.status >= 400:
-                    raise HTTPException(status_code=500, detail="Failed to send OTP email.")
-            print(f"[EMAIL SENT] OTP sent to {email} via Resend")
-            return
-        except urllib.error.HTTPError as e:
-            details = e.read().decode("utf-8", errors="replace")
-            print(f"[EMAIL ERROR] Resend failed for {email}: {e.code} {details}")
-            try:
-                resend_error = json.loads(details)
-                message = resend_error.get("message", "Failed to send OTP email.")
-            except json.JSONDecodeError:
-                message = "Failed to send OTP email."
-            raise HTTPException(status_code=e.code, detail=message)
-        except Exception as e:
-            print(f"[EMAIL ERROR] Resend failed for {email}: {e}")
-            raise HTTPException(status_code=500, detail="Failed to send OTP email.")
-
-    if not smtp_host:
+    if not sendgrid_api_key or not sendgrid_from:
         if os.getenv("RENDER"):
             raise HTTPException(
                 status_code=500,
-                detail="Email is not configured on Render. Add RESEND_API_KEY, or add SMTP_HOST, SMTP_USER, and SMTP_PASS."
+                detail="Email is not configured on Render. Add SENDGRID_API_KEY and SENDGRID_FROM."
             )
         print(f"\n[DEV MODE] OTP for {email}: {code}\n")
         return
 
     try:
-        original_getaddrinfo = socket.getaddrinfo
-
-        def getaddrinfo_ipv4(host, port, family=0, type=0, proto=0, flags=0):
-            return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
-
-        socket.getaddrinfo = getaddrinfo_ipv4
-        msg = MIMEMultipart()
-        msg["From"] = smtp_user
-        msg["To"] = email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
-
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(smtp_user, email, msg.as_string())
-            print(f"[EMAIL SENT] OTP sent to {email}")
-    except Exception as e:
+        resp = httpx.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            headers={
+                "Authorization": f"Bearer {sendgrid_api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "personalizations": [{"to": [{"email": email}]}],
+                "from": {"email": sendgrid_from, "name": "SecureChat"},
+                "subject": "Your SecureChat OTP Code",
+                "content": [
+                    {
+                        "type": "text/html",
+                        "value": (
+                            f"<p>Your SecureChat verification code is <b>{code}</b>.</p>"
+                            "<p>This code expires in 10 minutes. Do not share it with anyone.</p>"
+                        ),
+                    }
+                ],
+            },
+            timeout=10,
+        )
+        if resp.status_code >= 400:
+            print(f"[EMAIL ERROR] SendGrid failed for {email}: {resp.status_code} {resp.text}")
+            resp.raise_for_status()
+        print(f"[EMAIL SENT] OTP sent to {email} via SendGrid")
+    except httpx.HTTPError as e:
         print(f"[EMAIL ERROR] Failed to send OTP to {email}: {e}")
         raise HTTPException(status_code=500, detail="Failed to send OTP email.")
-    finally:
-        socket.getaddrinfo = original_getaddrinfo
 
 
 # ─────────────────────────────────────────────
@@ -431,8 +379,7 @@ def health():
         "service": "SecureChat API",
         "e2e_encrypted": True,
         "email_configured": bool(
-            os.getenv("RESEND_API_KEY")
-            or (os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASS"))
+            os.getenv("SENDGRID_API_KEY") and os.getenv("SENDGRID_FROM")
         ),
     }
 

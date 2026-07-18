@@ -42,7 +42,8 @@ def test_health():
 
 def test_request_otp(monkeypatch):
     """OTP request should succeed for any email in dev mode."""
-    monkeypatch.setenv("SMTP_HOST", "")
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.delenv("SENDGRID_FROM", raising=False)
     res = client.post("/api/auth/request-otp", json={"email": "test@example.com"})
     assert res.status_code == 200
     assert "OTP sent" in res.json()["message"]

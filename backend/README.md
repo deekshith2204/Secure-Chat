@@ -7,7 +7,7 @@ cd backend
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env            # Edit with your SMTP credentials
+cp .env.example .env            # Edit with your SendGrid credentials
 uvicorn main:app --reload --port 8000
 ```
 
@@ -28,11 +28,11 @@ Set these environment variables in Render:
 ```env
 PYTHON_VERSION=3.12.11
 DATABASE_URL=sqlite:///./securechat.db
-RESEND_API_KEY=your_resend_api_key
-RESEND_FROM=SecureChat <onboarding@resend.dev>
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM=dthadvai@gmail.com
 ```
 
-Use Gmail SMTP for local testing only. Render may timeout on raw SMTP, so the deployed app should use the Resend HTTPS API.
+Use Twilio SendGrid's HTTPS Mail Send API for deployed OTP email delivery.
 
 ## Security Notes
 
