@@ -218,7 +218,12 @@ If you did not request this, ignore this email.
         except urllib.error.HTTPError as e:
             details = e.read().decode("utf-8", errors="replace")
             print(f"[EMAIL ERROR] Resend failed for {email}: {e.code} {details}")
-            raise HTTPException(status_code=500, detail="Failed to send OTP email.")
+            try:
+                resend_error = json.loads(details)
+                message = resend_error.get("message", "Failed to send OTP email.")
+            except json.JSONDecodeError:
+                message = "Failed to send OTP email."
+            raise HTTPException(status_code=e.code, detail=message)
         except Exception as e:
             print(f"[EMAIL ERROR] Resend failed for {email}: {e}")
             raise HTTPException(status_code=500, detail="Failed to send OTP email.")
@@ -280,9 +285,14 @@ def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
 
     otp = OTPCode(email=req.email, code=code, expires_at=expires_at)
     db.add(otp)
-    db.commit()
 
-    send_otp_email(req.email, code)
+    try:
+        send_otp_email(req.email, code)
+    except HTTPException:
+        db.rollback()
+        raise
+
+    db.commit()
 
     return {"message": "OTP sent. Check your email."}
 

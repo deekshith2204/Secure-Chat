@@ -11,6 +11,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from main import app, Base, get_db, OTPCode
+import main
 
 # ─── In-memory SQLite for tests ───
 TEST_DB_URL = "sqlite://"
@@ -50,6 +51,21 @@ def test_request_otp_rejects_invalid_email():
     """OTP should not be created for invalid email addresses."""
     res = client.post("/api/auth/request-otp", json={"email": "not-an-email"})
     assert res.status_code == 422
+
+def test_request_otp_rolls_back_when_email_fails(monkeypatch):
+    """Failed email delivery must not leave a usable OTP behind."""
+    def fail_email(email, code):
+        raise main.HTTPException(status_code=403, detail="Email provider rejected recipient.")
+
+    monkeypatch.setattr(main, "send_otp_email", fail_email)
+    res = client.post("/api/auth/request-otp", json={"email": "blocked@example.com"})
+    assert res.status_code == 403
+
+    db = TestingSessionLocal()
+    try:
+        assert db.query(OTPCode).filter(OTPCode.email == "blocked@example.com").count() == 0
+    finally:
+        db.close()
 
 def test_verify_invalid_otp():
     """Invalid OTP must be rejected."""
