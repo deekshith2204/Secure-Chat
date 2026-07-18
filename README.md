@@ -4,7 +4,7 @@ SecureChat is a web chat application built to demonstrate end-to-end encrypted m
 
 ## Live Deployment
 
-Access the deployed project here: **Add your Render deployment URL here**
+Access the deployed project here: [https://secure-chat-gb9z.onrender.com](https://secure-chat-gb9z.onrender.com/)
 
 ## Group Members
 
