@@ -1,5 +1,7 @@
 # SecureChat
 
+SecureChat is a web chat application built to demonstrate end-to-end encrypted messaging. The main idea is simple: the browser handles identity keys, encryption, and decryption, while the server only verifies users, stores public keys, and relays encrypted messages.
+
 ## Group Members
 
 1. Thadvai Deekshith (20087999)
@@ -9,20 +11,20 @@
 
 ## Objective
 
-SecureChat is a secure web chat application designed to demonstrate end-to-end encrypted messaging. The main objective is to make sure the server can help users find each other, verify identities, and relay messages without ever seeing plaintext messages or private keys.
-
-The application uses email-based OTP verification for identity and browser-based cryptography for message protection. Messages are encrypted before they leave the sender's browser and decrypted only inside the receiver's browser.
+The objective of SecureChat is to protect message privacy even when the backend server stores and forwards messages. Plaintext messages and private keys never leave the user's browser. The backend can help with registration, OTP verification, public-key lookup, and encrypted message delivery, but it cannot decrypt user messages.
 
 ## Core Idea
 
-The server is treated as a relay and storage layer, not as a trusted reader of messages. It stores:
+SecureChat treats the backend as a relay, not as a trusted reader of messages.
+
+The server stores:
 
 - User email addresses
 - User public keys
 - OTP verification records
 - Encrypted message ciphertext
 - AES-GCM IV values
-- Message metadata such as sender, receiver, and timestamp
+- Message metadata such as sender, recipient, and timestamp
 
 The server does not store:
 
@@ -34,28 +36,182 @@ The server does not store:
 
 | Layer | Technology | Purpose |
 | --- | --- | --- |
-| Frontend | HTML, CSS, JavaScript | User interface for registration and messaging |
-| Browser Crypto | Web Crypto API | Key generation, ECDH key agreement, AES-GCM encryption/decryption |
-| Backend | Python, FastAPI | REST API for OTP, registration, public key lookup, and encrypted message relay |
+| Frontend | HTML, CSS, JavaScript | User interface for registration, OTP verification, and messaging |
+| Browser Crypto | Web Crypto API | ECDH key generation, AES-GCM encryption, and AES-GCM decryption |
+| Backend | Python, FastAPI | REST API for OTP, registration, public-key lookup, and message relay |
 | Database | SQLite locally, PostgreSQL-ready through `DATABASE_URL` | Stores users, OTPs, and encrypted messages |
-| ORM | SQLAlchemy | Database models and queries |
-| Email | Resend API for Render, SMTP or console dev mode locally | Sends OTP codes for email verification |
-| API Docs | FastAPI Swagger UI | Interactive backend documentation at `/api/docs` |
-| Deployment Target | Render Web Service | Hosts the FastAPI backend and frontend together |
+| ORM | SQLAlchemy | Defines database tables and queries |
+| Email | Twilio SendGrid Mail Send API | Sends OTP codes during deployment |
+| Testing | Pytest, FastAPI TestClient | Validates API behavior |
+| Deployment | Render | Hosts the FastAPI backend and serves the frontend |
+
+## Project Structure
+
+```text
+securechat/
+|-- backend/
+|   |-- main.py              # FastAPI app, database models, routes, OTP email, frontend serving
+|   |-- requirements.txt     # Python dependencies
+|   |-- Dockerfile           # Container setup for deployment
+|   |-- .env.example         # Example environment variables
+|   |-- README.md            # Backend-specific setup notes
+|   `-- tests/
+|       |-- __init__.py
+|       `-- test_api.py      # API tests
+|-- frontend/
+|   |-- index.html           # Main browser UI
+|   |-- styles.css           # Page styling
+|   `-- app.js               # Client-side keys, encryption, decryption, and API calls
+|-- docker-compose.yml
+|-- run_local.sh
+|-- .gitignore
+`-- README.md
+```
+
+## Code Explanation
+
+### Backend: `backend/main.py`
+
+The backend is a FastAPI application. It defines the API routes, database models, OTP logic, SendGrid email delivery, and static frontend serving.
+
+Important parts:
+
+- `DATABASE_URL` is read from the environment. If it is not provided, the app uses local SQLite.
+- SQLAlchemy models define the database tables:
+  - `User` stores verified email addresses and public keys.
+  - `OTPCode` stores one-time verification codes, expiry time, and used status.
+  - `Message` stores encrypted messages only, including ciphertext, IV, sender email, recipient email, and sender public key.
+- Pydantic request models validate API input. Email fields use `EmailStr`, so invalid email formats are rejected before an OTP is created.
+- `generate_otp()` creates a 6-digit OTP using `secrets.choice`, which is better for security than normal pseudo-random generation.
+- `send_otp_email()` sends OTP messages using Twilio SendGrid. It reads:
+
+```env
+SENDGRID_API_KEY
+SENDGRID_FROM
+```
+
+If those variables are missing during local development, the OTP is printed in the terminal. On Render, missing email configuration returns an error instead of silently pretending the email was sent.
+
+### Backend API Routes
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/auth/request-otp` | Creates an OTP, invalidates old unused OTPs, and sends the new code by email |
+| `POST /api/auth/verify-otp` | Checks the OTP, rejects invalid or expired codes, and marks valid codes as used |
+| `POST /api/auth/register` | Registers or updates a user's public key only after a fresh OTP was verified |
+| `GET /api/users/{email}/public-key` | Returns a verified user's public key so another browser can encrypt a message for them |
+| `POST /api/messages/send` | Stores encrypted message data after checking sender and recipient are registered |
+| `GET /api/messages/{email}` | Returns encrypted messages for the selected recipient |
+| `GET /api/health` | Confirms the service is running and whether email is configured |
+
+### Frontend: `frontend/app.js`
+
+The frontend contains the main security logic. It is responsible for generating keys, storing the private key locally, encrypting outgoing messages, and decrypting incoming messages.
+
+Important parts:
+
+- `generateKeyPair()` creates an ECDH P-256 key pair using the Web Crypto API.
+- The public key is exported as JWK and uploaded to the backend after OTP verification.
+- The private key is stored in the browser and is never sent to the backend.
+- `deriveAesKey()` uses the local private key and the other user's public key to derive an AES-GCM key.
+- `encryptForRecipient()` encrypts the message in the sender's browser before it is sent to the backend.
+- `decryptMessage()` decrypts messages in the receiver's browser using the receiver's private key and sender's public key.
+- API calls connect the UI to the backend routes for OTP, registration, public-key lookup, sending messages, and fetching messages.
+
+### Frontend Files
+
+- `frontend/index.html` defines the registration form, OTP input, message form, and inbox area.
+- `frontend/styles.css` styles the chat interface and status messages.
+- `frontend/app.js` contains the actual application behavior and browser-side cryptography.
 
 ## Main Workflow
 
-### 1. Start the Backend
+### 1. Register a User
 
-From the backend folder:
+1. The user enters an email address.
+2. The user requests an OTP.
+3. The backend creates a 6-digit OTP and sends it using SendGrid.
+4. The browser generates an ECDH P-256 key pair.
+5. The user enters the OTP.
+6. The backend verifies the OTP.
+7. The browser uploads only the public key.
+8. The private key remains in the browser.
+9. The app moves to the messaging screen.
 
-```powershell
-cd C:\Users\thadv\OneDrive\Desktop\securechat\backend
-.\venv\Scripts\Activate.ps1
-python -m uvicorn main:app --reload
+### 2. Send a Message
+
+1. The sender enters the recipient email.
+2. The browser asks the backend for the recipient public key.
+3. The browser derives an AES-GCM key using ECDH.
+4. The message is encrypted locally.
+5. The backend receives only ciphertext, IV, sender email, recipient email, and sender public key.
+6. The backend stores the encrypted message.
+
+### 3. Receive a Message
+
+1. The receiver fetches messages from the backend.
+2. The backend returns encrypted messages only.
+3. The receiver's browser derives the AES-GCM key.
+4. The browser decrypts the message locally.
+5. Plaintext appears only inside the receiver's browser.
+
+## Database Design
+
+### `users`
+
+```text
+id, email, public_key, verified, created_at
 ```
 
-Open the application:
+Stores verified users and their public keys. Private keys are not stored.
+
+### `otp_codes`
+
+```text
+id, email, code, expires_at, used
+```
+
+Stores short-lived OTP codes. Old unused OTPs are invalidated when a new code is requested.
+
+### `messages`
+
+```text
+id, sender_email, recipient_email, ciphertext, iv, sender_public_key, delivered, created_at
+```
+
+Stores encrypted message payloads and metadata. It does not store plaintext.
+
+## Environment Variables
+
+Local development can run without real email by leaving SendGrid values blank. The OTP will print in the backend terminal.
+
+```env
+DATABASE_URL=sqlite:///./securechat.db
+SENDGRID_API_KEY=
+SENDGRID_FROM=dthadvai@gmail.com
+```
+
+For Render deployment, set:
+
+```env
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM=dthadvai@gmail.com
+```
+
+Remove old `RESEND_API_KEY`, `RESEND_FROM`, and SMTP variables if they are still present in Render.
+
+## Run Locally
+
+From the project root:
+
+```powershell
+cd backend
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m uvicorn main:app --reload --port 8000
+```
+
+Open:
 
 ```text
 http://127.0.0.1:8000
@@ -67,193 +223,103 @@ API documentation:
 http://127.0.0.1:8000/api/docs
 ```
 
-### 2. Register a User
+## Deployment on Render
 
-1. User enters an email address.
-2. User clicks **Request OTP**.
-3. Backend creates a 6-digit OTP and sends it by SMTP, or prints it in the terminal during dev mode.
-4. Browser generates a cryptographic key pair using the Web Crypto API.
-5. User enters the OTP and clicks **Verify and continue**.
-6. Backend verifies the OTP.
-7. Browser uploads only the public key to the backend.
-8. The private key remains in browser storage and is never sent to the server.
-9. After successful registration, the UI moves to the messaging section.
+Render can run the FastAPI backend and serve the frontend from the same service.
 
-### 3. Send a Message
-
-1. Sender enters the recipient email address.
-2. Browser asks the backend for the recipient's public key.
-3. Sender's browser uses ECDH P-256 to derive a shared AES-GCM key.
-4. Browser encrypts the message locally with AES-GCM.
-5. Browser sends ciphertext, IV, sender email, recipient email, and sender public key to the backend.
-6. Backend stores the encrypted message only.
-
-### 4. Receive a Message
-
-1. Receiver opens the messaging page.
-2. Receiver clicks **Fetch messages**.
-3. Backend returns encrypted messages for that receiver.
-4. Receiver's browser derives the AES-GCM key using its private key and the sender's public key.
-5. Receiver's browser decrypts the ciphertext locally.
-6. Plaintext is displayed only in the browser.
-
-## Database Design
-
-### Users
-
-Stores verified users and their public keys.
+Build command:
 
 ```text
-users(id, email, public_key, verified, created_at)
+pip install -r backend/requirements.txt
 ```
 
-### OTP Codes
-
-Stores one-time verification codes.
+Start command:
 
 ```text
-otp_codes(id, email, code, expires_at, used)
+uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 ```
 
-### Messages
+Recommended Render variables:
 
-Stores encrypted message payloads.
-
-```text
-messages(id, sender_email, recipient_email, ciphertext, iv, sender_public_key, delivered, created_at)
+```env
+PYTHON_VERSION=3.12.11
+DATABASE_URL=sqlite:///./securechat.db
+SENDGRID_API_KEY=your_sendgrid_api_key
+SENDGRID_FROM=dthadvai@gmail.com
 ```
+
+SQLite is acceptable for a quick demo. PostgreSQL is recommended for production because local SQLite data on cloud services can be lost during restarts or redeploys.
+
+## Testing
+
+Run backend tests from the project root:
+
+```powershell
+.\backend\venv\Scripts\python.exe -m pytest backend\tests -v
+```
+
+The current backend test suite checks:
+
+- Health endpoint response
+- OTP request success in local dev mode
+- Invalid email rejection
+- OTP rollback when email sending fails
+- Invalid OTP rejection
+- Unknown user lookup rejection
+- Register and public-key lookup flow
+- Registration blocked until OTP is verified
 
 ## Security Features
 
-- Email OTP is required before public key registration.
-- OTP codes expire and are marked as used after verification.
+- OTP verification is required before public-key registration.
+- OTP codes expire and are marked as used after successful verification.
+- Old unused OTPs are invalidated when a new OTP is requested.
 - Private keys stay in the browser.
-- Public keys are stored on the server for recipient lookup.
-- Messages are encrypted in the browser before reaching the backend.
+- Public keys are stored on the server only for lookup.
+- Messages are encrypted before reaching the backend.
 - AES-GCM provides confidentiality and tamper detection.
-- ECDH P-256 is used for browser-side key agreement.
-- Backend validates that recipients are registered before storing messages.
-- Backend validates that senders are registered before relaying messages.
-- The server stores ciphertext and IV values, not plaintext.
+- ECDH P-256 is used for key agreement.
+- The backend checks that both sender and recipient are registered.
+- The backend stores ciphertext and IV values, not plaintext.
 
-## Vulnerabilities and Mitigations
+## Challenges Faced and How They Were Handled
 
-| Vulnerability | Risk | Mitigation |
+| Challenge | What Happened | How It Was Handled |
 | --- | --- | --- |
-| Public key substitution / MITM | A malicious server could return the attacker's public key instead of the real recipient key. | Add key fingerprint verification or safety numbers so users can compare public keys out of band. |
-| Browser storage loss | If local storage is cleared, the private key is lost and old messages may not decrypt. | Add encrypted private-key backup protected by a user password, or warn users before clearing keys. |
-| Device/browser change | A user registering from another browser creates a new private key. Old messages may not decrypt there. | Add account key recovery or controlled key rotation with clear user warnings. |
-| OTP brute force | Attackers may try many OTP combinations. | Add rate limiting per email/IP, lockout after repeated failures, and short OTP expiry. |
-| Email account compromise | If an attacker controls the user's email, they can pass OTP verification. | Encourage strong email security and 2FA; optionally add device trust or secondary verification. |
-| No forward secrecy for stored messages | If a long-term private key is compromised, old messages may be decryptable. | Use session keys, ratcheting, or rotating message keys for stronger forward secrecy. |
-| XSS in frontend | Malicious script could read browser keys or messages. | Use strict input handling, avoid unsafe HTML insertion, add Content Security Policy, and sanitize displayed content. |
-| Open CORS in development | `allow_origins=["*"]` is convenient locally but too broad for production. | Restrict CORS to the deployed frontend domain in production. |
-| SMTP credential exposure | If `.env` is committed, email credentials could leak. | Keep `.env` out of Git, use `.env.example`, and rotate app passwords if exposed. |
-| SMTP IPv6 connectivity on Render | Gmail SMTP may resolve to IPv6 first, causing `[Errno 101] Network is unreachable` on Render. | Force SMTP DNS resolution to IPv4 before connecting, or switch to an HTTPS email API such as Resend or SendGrid. |
+| Keeping messages private from the server | A normal chat backend would receive and store plaintext messages. | Encryption and decryption were moved into `frontend/app.js` using the Web Crypto API. The backend stores only ciphertext and IV values. |
+| Managing user identity | The app needed a way to connect an email identity to a public key. | OTP verification was added before registration. After OTP verification, the browser uploads only the public key. |
+| Preventing registration without verification | Earlier flow could allow public-key registration without strongly tying it to a fresh OTP. | Backend registration now checks for a recent verified OTP before saving the public key. |
+| Handling invalid emails | Invalid email input could create unnecessary OTP records. | Backend request schemas use `EmailStr`, so invalid email formats are rejected before database records are created. |
+| OTP reuse and stale codes | Multiple OTP requests could leave old valid codes active. | The backend deletes old unused OTPs before creating a new OTP and marks successful OTPs as used. |
+| Email delivery on deployment | Raw SMTP and previous email-provider configuration caused deployment and delivery problems. | OTP delivery was changed to Twilio SendGrid's HTTPS Mail Send API using `SENDGRID_API_KEY` and `SENDGRID_FROM`. |
+| Local development without paid/real email sending | Developers still need to test OTP flow locally even without SendGrid credentials. | If SendGrid variables are missing locally, the backend prints the OTP in the terminal. On Render, missing email configuration returns an error. |
+| Sender spoofing | A user could try to send a message using another sender email. | The backend now checks that the sender email is registered before storing the message. |
+| Public-key trust | The server is still the public-key directory and could theoretically return the wrong key. | This limitation is documented. A future improvement is safety-number or fingerprint comparison between users. |
+| Cloud database persistence | SQLite is easy for demos but can lose data on cloud restarts. | SQLite is used for simple demos, while the code supports PostgreSQL through `DATABASE_URL` for more reliable deployment. |
+| Testing after provider changes | Changing from Resend/SMTP to SendGrid could break OTP behavior. | Tests were updated to clear `SENDGRID_*` variables for dev mode, and the backend test suite was run successfully. |
 
-## How the Current Implementation Handles Gaps
+## Known Limitations
 
-- Registration cannot complete unless the OTP was verified.
-- The app automatically moves from registration to messaging after successful registration.
-- Returning users with saved keys open directly in the messaging section.
-- Message encryption uses ECDH P-256 plus AES-GCM instead of sending plaintext or relying on server-side encryption.
-- The backend acts as a ciphertext relay and does not decrypt messages.
-- The README documents the main remaining trust issue: the server is still trusted as the public-key directory.
+| Limitation | Risk | Future Improvement |
+| --- | --- | --- |
+| Public-key substitution | A malicious or compromised server could return the wrong public key. | Add key fingerprints or safety numbers for out-of-band verification. |
+| Browser storage loss | If the browser data is cleared, the private key is lost. | Add encrypted private-key backup protected by a user password. |
+| Device change | A new browser creates a new private key and may not decrypt old messages. | Add controlled key recovery or key rotation. |
+| OTP brute force | Attackers could try repeated OTP guesses. | Add rate limiting per email and IP address. |
+| No advanced forward secrecy | Long-term key compromise could affect older messages. | Add session keys or a ratcheting protocol. |
+| Open CORS in development | `allow_origins=["*"]` is too broad for production. | Restrict CORS to the deployed frontend domain. |
+| XSS risk | Malicious script could access browser-side keys or messages. | Add a strict Content Security Policy and avoid unsafe HTML rendering. |
 
-## Local Email Configuration
+## Future Improvements
 
-For local testing without email delivery, leave SMTP blank in `backend/.env`:
-
-```env
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-```
-
-In this mode, OTP codes print in the backend terminal.
-
-For Gmail delivery, use a Gmail app password:
-
-```env
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_16_character_app_password
-```
-
-Do not use your normal Gmail password. Gmail requires an app password when SMTP login is used.
-
-For Render deployment, use Resend instead of Gmail SMTP because Render may timeout on raw SMTP connections. Create a Resend API key and add:
-
-```env
-RESEND_API_KEY=your_resend_api_key
-RESEND_FROM=SecureChat <onboarding@resend.dev>
-```
-
-For a real public app, verify your own domain in Resend and use an address from that domain for `RESEND_FROM`.
-
-## Deployment
-
-### Recommended Option: Render
-
-Render is the simplest deployment option for this project because the FastAPI backend can also serve the frontend files. The project includes a `render.yaml` blueprint for this.
-
-Before deploying:
-
-1. Push this project to GitHub.
-2. Make sure `.env` is not committed.
-3. In Render, create a new **Blueprint** or **Web Service** from the GitHub repository.
-4. Render will use:
-
-```text
-Build command: pip install -r backend/requirements.txt
-Start command: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
-Python version: 3.12.11
-```
-
-Required Render environment variables:
-
-```env
-DATABASE_URL=sqlite:///./securechat.db
-RESEND_API_KEY=your_resend_api_key
-RESEND_FROM=SecureChat <onboarding@resend.dev>
-```
-
-For a quick demo, SQLite is acceptable. For a more reliable deployment, use PostgreSQL and set `DATABASE_URL` to the PostgreSQL connection string provided by the hosting platform.
-
-OTP codes are never returned to the browser. If email delivery fails, the API returns an error and registration cannot continue. Invalid email formats are rejected before an OTP is created.
-
-With Resend's testing sender, emails can usually be sent only to the email address used for the Resend account. To send OTPs to other recipients, verify a domain in Resend and use a sender address from that domain.
-
-Important deployment note: SQLite on cloud platforms may be temporary. If the service restarts or redeploys, local SQLite data can be lost. PostgreSQL is recommended for production or final demonstration.
-
-After deployment, Render gives a public URL similar to:
-
-```text
-https://securechat.onrender.com
-```
-
-Use that URL to open the app. The API docs will be available at:
-
-```text
-https://securechat.onrender.com/api/docs
-```
-
-### Vercel Option
-
-Vercel is excellent for frontend-only apps and serverless functions, but this project is a better fit for Render because it uses a FastAPI backend, SMTP, and database state. Vercel can still work, but it would require adapting the backend into Vercel's Python serverless structure and using an external database.
-
-### AWS Option
-
-AWS is powerful but more complex. Good AWS options include:
-
-- AWS Elastic Beanstalk for the FastAPI app
-- AWS App Runner for containerized deployment
-- Amazon RDS PostgreSQL for the database
-- AWS SES for production email delivery
-
-AWS is recommended only if the project needs a more advanced cloud architecture. For a student demo, Render is faster and easier.
+- Add public-key fingerprint display and safety-number verification.
+- Add rate limiting for OTP request and verification endpoints.
+- Add PostgreSQL for persistent production deployment.
+- Add encrypted private-key backup and recovery.
+- Add stronger session authentication after OTP verification.
+- Add message read and delivered status.
+- Add production CORS settings.
+- Add Content Security Policy headers.
 
 ## Demo Steps
 
@@ -267,31 +333,6 @@ AWS is recommended only if the project needs a more advanced cloud architecture.
 8. Confirm that the message decrypts only in the receiver's browser.
 
 Use separate browser profiles for different users because each browser stores its own private key.
-
-## Testing
-
-Backend tests can be run from the project root:
-
-```powershell
-.\backend\venv\Scripts\python.exe -m pytest backend\tests -v
-```
-
-Frontend JavaScript syntax can be checked with:
-
-```powershell
-node --check frontend\app.js
-```
-
-## Future Improvements
-
-- Add key fingerprint display and verification.
-- Add message read/delivered status.
-- Add rate limiting for OTP requests and OTP verification attempts.
-- Add encrypted private-key backup and recovery.
-- Add stronger session authentication after OTP verification.
-- Add production CORS settings.
-- Add Content Security Policy headers.
-- Add PostgreSQL for persistent Render production storage.
 
 ## Project Link
 
