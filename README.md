@@ -8,10 +8,10 @@ Access the deployed project here: [https://secure-chat-gb9z.onrender.com](https:
 
 ## Group Members
 
-1. Thadvai Deekshith (20087999)
-2. Kunal Khatwani (20079145)
-3. Suraj Kumar Oad (20035415)
-4. Sampath Reddy
+1. Thadvai Deekshith (20087999)-Responsible for backend including security
+2. Kunal Khatwani (20079145)-Responsible for Fronend.
+3. Suraj Kumar Oad (20035415)-Responsible for data base creation and design
+4. Sampath Reddy-Responsible for deployment
 
 ## Objective
 
