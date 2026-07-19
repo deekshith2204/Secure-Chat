@@ -2,9 +2,10 @@
 
 SecureChat is a web chat application built to demonstrate end-to-end encrypted messaging. The main idea is simple: the browser handles identity keys, encryption, and decryption, while the server only verifies users, stores public keys, and relays encrypted messages.
 
-## Live Deployment
+## Project Access Links
 
-Access the deployed project here: [https://secure-chat-gb9z.onrender.com](https://secure-chat-gb9z.onrender.com/)
+- Live deployment: [https://secure-chat-gb9z.onrender.com](https://secure-chat-gb9z.onrender.com/)
+- Microsoft 365 project folder: [SecureChat project files](https://mydbs-my.sharepoint.com/:f:/g/personal/20079145_mydbs_ie/IgA137ak4S2wTZ7uLfJyN0XlAVIDe7SKLs29QnD5spCmaoM)
 
 ## Group Members
 
@@ -338,6 +339,3 @@ The current backend test suite checks:
 
 Use separate browser profiles for different users because each browser stores its own private key.
 
-## Project Link
-
-Microsoft 365 link: https://mydbs-my.sharepoint.com/:f:/g/personal/20079145_mydbs_ie/IgA137ak4S2wTZ7uLfJyN0XlAVIDe7SKLs29QnD5spCmaoM
