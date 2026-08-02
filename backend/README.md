@@ -28,11 +28,13 @@ Set these environment variables in Render:
 ```env
 PYTHON_VERSION=3.12.11
 DATABASE_URL=sqlite:///./securechat.db
+SESSION_SECRET=replace_with_a_long_random_secret
 SENDGRID_API_KEY=your_sendgrid_api_key
 SENDGRID_FROM=dthadvai@gmail.com
 ```
 
 Use Twilio SendGrid's HTTPS Mail Send API for deployed OTP email delivery.
+`SESSION_SECRET` signs the browser session token returned after OTP verification.
 
 ## Security Notes
 

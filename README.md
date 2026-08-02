@@ -102,11 +102,11 @@ If those variables are missing during local development, the OTP is printed in t
 | Route | Purpose |
 | --- | --- |
 | `POST /api/auth/request-otp` | Creates an OTP, invalidates old unused OTPs, and sends the new code by email |
-| `POST /api/auth/verify-otp` | Checks the OTP, rejects invalid or expired codes, and marks valid codes as used |
-| `POST /api/auth/register` | Registers or updates a user's public key only after a fresh OTP was verified |
+| `POST /api/auth/verify-otp` | Checks the OTP, rejects invalid or expired codes, marks valid codes as used, and returns a signed session token |
+| `POST /api/auth/register` | Registers or updates a user's public key only after a fresh OTP and matching session token are verified |
 | `GET /api/users/{email}/public-key` | Returns a verified user's public key so another browser can encrypt a message for them |
-| `POST /api/messages/send` | Stores encrypted message data after checking sender and recipient are registered |
-| `GET /api/messages/{email}` | Returns encrypted messages for the selected recipient |
+| `POST /api/messages/send` | Stores encrypted message data only when the session token matches the sender email |
+| `GET /api/messages/{email}` | Returns encrypted messages only when the session token matches the requested inbox email |
 | `GET /api/health` | Confirms the service is running and whether email is configured |
 
 ### Frontend: `frontend/app.js`
@@ -117,10 +117,12 @@ Important parts:
 
 - `generateKeyPair()` creates an ECDH P-256 key pair using the Web Crypto API.
 - The public key is exported as JWK and uploaded to the backend after OTP verification.
-- The private key is stored in the browser and is never sent to the backend.
+- The private key is stored in browser IndexedDB as a non-extractable `CryptoKey` and is never sent to the backend.
 - `deriveAesKey()` uses the local private key and the other user's public key to derive an AES-GCM key.
 - `encryptForRecipient()` encrypts the message in the sender's browser before it is sent to the backend.
 - `decryptMessage()` decrypts messages in the receiver's browser using the receiver's private key and sender's public key.
+- Public-key fingerprints are generated with SHA-256 so users can compare keys before trusting a contact.
+- The browser stores trusted contact fingerprints and blocks messages if a contact's public key changes unexpectedly.
 - API calls connect the UI to the backend routes for OTP, registration, public-key lookup, sending messages, and fetching messages.
 
 ### Frontend Files
@@ -138,27 +140,31 @@ Important parts:
 3. The backend creates a 6-digit OTP and sends it using SendGrid.
 4. The browser generates an ECDH P-256 key pair.
 5. The user enters the OTP.
-6. The backend verifies the OTP.
+6. The backend verifies the OTP and returns a signed session token.
 7. The browser uploads only the public key.
-8. The private key remains in the browser.
+8. The private key remains in the browser as a non-extractable IndexedDB key.
 9. The app moves to the messaging screen.
 
 ### 2. Send a Message
 
 1. The sender enters the recipient email.
 2. The browser asks the backend for the recipient public key.
-3. The browser derives an AES-GCM key using ECDH.
-4. The message is encrypted locally.
-5. The backend receives only ciphertext, IV, sender email, recipient email, and sender public key.
-6. The backend stores the encrypted message.
+3. The browser checks the recipient public-key fingerprint.
+4. On first contact, the sender must trust the fingerprint.
+5. If the recipient public key changes later, the browser blocks sending until the fingerprint is verified.
+6. The browser derives an AES-GCM key using ECDH.
+7. The message is encrypted locally.
+8. The backend receives only ciphertext, IV, sender email, recipient email, and sender public key.
+9. The backend stores the encrypted message.
 
 ### 3. Receive a Message
 
 1. The receiver fetches messages from the backend.
 2. The backend returns encrypted messages only.
-3. The receiver's browser derives the AES-GCM key.
-4. The browser decrypts the message locally.
-5. Plaintext appears only inside the receiver's browser.
+3. The receiver's browser checks the sender public-key fingerprint.
+4. If the sender key is trusted, the browser derives the AES-GCM key.
+5. The browser decrypts the message locally.
+6. Plaintext appears only inside the receiver's browser.
 
 ## Database Design
 
@@ -192,6 +198,7 @@ Local development can run without real email by leaving SendGrid values blank. T
 
 ```env
 DATABASE_URL=sqlite:///./securechat.db
+SESSION_SECRET=replace_with_a_long_random_secret
 SENDGRID_API_KEY=
 SENDGRID_FROM=dthadvai@gmail.com
 ```
@@ -249,6 +256,7 @@ Recommended Render variables:
 ```env
 PYTHON_VERSION=3.12.11
 DATABASE_URL=sqlite:///./securechat.db
+SESSION_SECRET=replace_with_a_long_random_secret
 SENDGRID_API_KEY=your_sendgrid_api_key
 SENDGRID_FROM=dthadvai@gmail.com
 ```
@@ -279,19 +287,22 @@ The current backend test suite checks:
 - OTP verification is required before public-key registration.
 - OTP codes expire and are marked as used after successful verification.
 - Old unused OTPs are invalidated when a new OTP is requested.
-- Private keys stay in the browser.
+- Private keys stay in the browser as non-extractable IndexedDB `CryptoKey` objects.
 - Public keys are stored on the server only for lookup.
+- Users can view their own public-key fingerprint in the account panel.
+- The browser stores trusted contact fingerprints and blocks unexpected public-key changes.
 - Messages are encrypted before reaching the backend.
 - AES-GCM provides confidentiality and tamper detection.
 - ECDH P-256 is used for key agreement.
 - The backend checks that both sender and recipient are registered.
+- Registering a key, sending a message, and fetching an inbox require a signed session token for the same email.
 - The backend stores ciphertext and IV values, not plaintext.
 
 ## Challenges Faced and How They Were Handled
 
 | Challenge | What Happened | How It Was Handled |
 | --- | --- | --- |
-| Keeping messages private from the server | A normal chat backend would receive and store plaintext messages. | Encryption and decryption were moved into `frontend/app.js` using the Web Crypto API. The backend stores only ciphertext and IV values. |
+| Keeping messages private from the server | A normal chat backend would receive and store plaintext messages. | Encryption and decryption happen in `frontend/app.js` using the Web Crypto API. The backend stores only ciphertext, IV values, and metadata. |
 | Managing user identity | The app needed a way to connect an email identity to a public key. | OTP verification was added before registration. After OTP verification, the browser uploads only the public key. |
 | Preventing registration without verification | Earlier flow could allow public-key registration without strongly tying it to a fresh OTP. | Backend registration now checks for a recent verified OTP before saving the public key. |
 | Handling invalid emails | Invalid email input could create unnecessary OTP records. | Backend request schemas use `EmailStr`, so invalid email formats are rejected before database records are created. |
@@ -299,7 +310,9 @@ The current backend test suite checks:
 | Email delivery on deployment | Raw SMTP and previous email-provider configuration caused deployment and delivery problems. | OTP delivery was changed to Twilio SendGrid's HTTPS Mail Send API using `SENDGRID_API_KEY` and `SENDGRID_FROM`. |
 | Local development without paid/real email sending | Developers still need to test OTP flow locally even without SendGrid credentials. | If SendGrid variables are missing locally, the backend prints the OTP in the terminal. On Render, missing email configuration returns an error. |
 | Sender spoofing | A user could try to send a message using another sender email. | The backend now checks that the sender email is registered before storing the message. |
-| Public-key trust | The server is still the public-key directory and could theoretically return the wrong key. | This limitation is documented. A future improvement is safety-number or fingerprint comparison between users. |
+| API browsing/impersonation | An outsider could try to call backend routes directly and type another user's email. | OTP verification now returns a signed session token, and protected routes reject requests unless the token email matches the requested sender or inbox. |
+| Public-key trust | The server is still the public-key directory and could theoretically return the wrong key. | The frontend now calculates SHA-256 public-key fingerprints, shows the user's own fingerprint, stores trusted contact fingerprints, and blocks a chat if a contact's key changes unexpectedly. |
+| Private-key exposure in browser storage | The first version stored private-key material as exportable JWK in `localStorage`, which is easier to steal if browser storage is exposed. | Private keys are now migrated into IndexedDB as non-extractable `CryptoKey` objects and the old `localStorage` private JWK is removed. |
 | Cloud database persistence | SQLite is easy for demos but can lose data on cloud restarts. | SQLite is used for simple demos, while the code supports PostgreSQL through `DATABASE_URL` for more reliable deployment. |
 | Testing after provider changes | Changing from Resend/SMTP to SendGrid could break OTP behavior. | Tests were updated to clear `SENDGRID_*` variables for dev mode, and the backend test suite was run successfully. |
 
@@ -307,21 +320,24 @@ The current backend test suite checks:
 
 | Limitation | Risk | Future Improvement |
 | --- | --- | --- |
-| Public-key substitution | A malicious or compromised server could return the wrong public key. | Add key fingerprints or safety numbers for out-of-band verification. |
+| Public-key substitution | A malicious or compromised server could return the wrong public key. | The app now uses trust-on-first-use fingerprints and blocks changed keys. Stronger future work would require out-of-band fingerprint comparison or signed key transparency. |
 | Browser storage loss | If the browser data is cleared, the private key is lost. | Add encrypted private-key backup protected by a user password. |
 | Device change | A new browser creates a new private key and may not decrypt old messages. | Add controlled key recovery or key rotation. |
 | OTP brute force | Attackers could try repeated OTP guesses. | Add rate limiting per email and IP address. |
+| Session token theft | If an attacker steals a valid browser token, they could act as that user until it expires. | Tokens expire, and `SESSION_SECRET` signs them. Future work should add logout, token revocation, secure cookies, and shorter expiry options. |
 | No advanced forward secrecy | Long-term key compromise could affect older messages. | Add session keys or a ratcheting protocol. |
 | Open CORS in development | `allow_origins=["*"]` is too broad for production. | Restrict CORS to the deployed frontend domain. |
+| Full browser/device compromise | Malware, a malicious extension, or injected JavaScript running inside the user's browser could still act as that user. | Non-extractable keys reduce direct key theft, but a fully compromised browser cannot be completely solved by frontend code alone. Add CSP, dependency review, extension/device hygiene, and stronger session controls. |
 | XSS risk | Malicious script could access browser-side keys or messages. | Add a strict Content Security Policy and avoid unsafe HTML rendering. |
 
 ## Future Improvements
 
-- Add public-key fingerprint display and safety-number verification.
+- Add stronger out-of-band safety-number verification for fingerprints.
 - Add rate limiting for OTP request and verification endpoints.
 - Add PostgreSQL for persistent production deployment.
 - Add encrypted private-key backup and recovery.
 - Add stronger session authentication after OTP verification.
+- Add logout and server-side session revocation.
 - Add message read and delivered status.
 - Add production CORS settings.
 - Add Content Security Policy headers.

@@ -1,6 +1,6 @@
 
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, Header, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -14,6 +14,10 @@ import string
 import secrets
 import os
 import httpx
+import base64
+import hashlib
+import hmac
+import json
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +30,8 @@ load_dotenv(BASE_DIR / ".env")
 # Database Setup (SQLite for local / PostgreSQL for cloud deployment)
 # ─────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./securechat.db")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "securechat-dev-session-secret")
+SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "8"))
 
 engine = create_engine(
     DATABASE_URL,
@@ -115,6 +121,59 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+
+def create_session_token(email: str) -> str:
+    payload = {
+        "email": email,
+        "exp": (datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS)).timestamp(),
+    }
+    payload_b64 = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = hmac.new(
+        SESSION_SECRET.encode("utf-8"),
+        payload_b64.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    return f"{payload_b64}.{_b64url_encode(signature)}"
+
+
+def verify_session_token(token: str) -> str:
+    try:
+        payload_b64, signature_b64 = token.split(".", 1)
+        expected_signature = hmac.new(
+            SESSION_SECRET.encode("utf-8"),
+            payload_b64.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(_b64url_decode(signature_b64), expected_signature):
+            raise ValueError("bad signature")
+        payload = json.loads(_b64url_decode(payload_b64))
+        if payload["exp"] < datetime.utcnow().timestamp():
+            raise ValueError("expired")
+        return payload["email"]
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session.")
+
+
+def get_current_email(authorization: str = Header(default="")) -> str:
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing session token.")
+    return verify_session_token(token)
+
+
+def require_same_email(current_email: str, requested_email: str):
+    if current_email != requested_email:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session does not match requested email.")
 
 
 # ─────────────────────────────────────────────
@@ -248,8 +307,7 @@ def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
 @app.post("/api/auth/verify-otp", summary="Step 2: Verify OTP code")
 def verify_otp(req: OTPVerifyRequest, db: Session = Depends(get_db)):
     """
-    Validates OTP. Returns a session token placeholder.
-    In production, issue a signed JWT here instead.
+    Validates OTP and returns a signed session token for this email.
     """
     if not req.code.isdigit() or len(req.code) != 6:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
@@ -268,11 +326,15 @@ def verify_otp(req: OTPVerifyRequest, db: Session = Depends(get_db)):
 
     otp.used = True
     db.commit()
-    return {"verified": True, "email": req.email}
+    return {"verified": True, "email": req.email, "session_token": create_session_token(req.email)}
 
 
 @app.post("/api/auth/register", summary="Step 3: Register email + upload public key")
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
+def register(
+    req: RegisterRequest,
+    db: Session = Depends(get_db),
+    current_email: str = Depends(get_current_email),
+):
     """
     Associates a verified email with its browser-generated public key.
     SECURITY: Only public key is stored. Private key stays in browser IndexedDB.
@@ -280,6 +342,8 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     server could swap public keys (MITM). Mitigation: key fingerprint verification
     (Signal-style 'safety numbers') out-of-band.
     """
+    require_same_email(current_email, req.email)
+
     if not has_recent_verified_otp(req.email, db):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -316,12 +380,18 @@ def get_public_key(email: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/messages/send", summary="Send an encrypted message (relay only)")
-def send_message(req: SendMessageRequest, db: Session = Depends(get_db)):
+def send_message(
+    req: SendMessageRequest,
+    db: Session = Depends(get_db),
+    current_email: str = Depends(get_current_email),
+):
     """
     Stores ciphertext + IV. Server cannot decrypt — it has no private keys.
     Ciphertext encrypted in the browser before this call.
     AES-GCM provides: confidentiality + integrity (auth tag detects tampering).
     """
+    require_same_email(current_email, req.sender_email)
+
     sender = db.query(User).filter(
         User.email == req.sender_email,
         User.verified == True
@@ -349,12 +419,18 @@ def send_message(req: SendMessageRequest, db: Session = Depends(get_db)):
 
 
 @app.get("/api/messages/{email}", summary="Fetch encrypted messages for a user")
-def get_messages(email: str, db: Session = Depends(get_db)):
+def get_messages(
+    email: str,
+    db: Session = Depends(get_db),
+    current_email: str = Depends(get_current_email),
+):
     """
     Returns ciphertext messages for this recipient.
     Client-side JavaScript decrypts using private key from IndexedDB.
     Server never performs decryption.
     """
+    require_same_email(current_email, email)
+
     messages = db.query(Message).filter(
         Message.recipient_email == email
     ).order_by(Message.created_at.asc()).all()

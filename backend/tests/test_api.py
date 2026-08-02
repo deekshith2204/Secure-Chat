@@ -33,6 +33,10 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
+
+def auth_headers(email: str):
+    return {"Authorization": f"Bearer {main.create_session_token(email)}"}
+
 # ─── Tests ───
 
 def test_health():
@@ -91,9 +95,11 @@ def test_register_and_lookup():
     verify_res = client.post("/api/auth/verify-otp",
                              json={"email": "alice@example.com", "code": "123456"})
     assert verify_res.status_code == 200
+    token = verify_res.json()["session_token"]
 
     reg_res = client.post("/api/auth/register",
-                          json={"email": "alice@example.com", "public_key": '{"kty":"RSA"}'})
+                          json={"email": "alice@example.com", "public_key": '{"kty":"RSA"}'},
+                          headers={"Authorization": f"Bearer {token}"})
     assert reg_res.status_code == 200
 
     lookup_res = client.get("/api/users/alice%40example.com/public-key")
@@ -103,5 +109,29 @@ def test_register_and_lookup():
 def test_register_requires_verified_otp():
     """A public key cannot be registered before OTP verification."""
     res = client.post("/api/auth/register",
-                      json={"email": "mallory@example.com", "public_key": '{"kty":"EC"}'})
+                      json={"email": "mallory@example.com", "public_key": '{"kty":"EC"}'},
+                      headers=auth_headers("mallory@example.com"))
     assert res.status_code == 403
+
+
+def test_register_requires_matching_session():
+    """A user cannot register a key for a different email session."""
+    res = client.post("/api/auth/register",
+                      json={"email": "victim@example.com", "public_key": '{"kty":"EC"}'},
+                      headers=auth_headers("mallory@example.com"))
+    assert res.status_code == 403
+
+
+def test_messages_require_session():
+    """Message send and inbox fetch endpoints require a verified session token."""
+    send_res = client.post("/api/messages/send", json={
+        "sender_email": "alice@example.com",
+        "recipient_email": "bob@example.com",
+        "ciphertext": "abc",
+        "iv": "def",
+        "sender_public_key": '{"kty":"EC"}',
+    })
+    assert send_res.status_code == 401
+
+    fetch_res = client.get("/api/messages/alice%40example.com")
+    assert fetch_res.status_code == 401

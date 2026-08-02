@@ -4,8 +4,12 @@ const state = {
   email: '',
   keyPair: null,
   publicJwk: null,
-  privateJwk: null,
+  sessionToken: '',
 };
+
+const KEY_DB_NAME = 'securechat-keys';
+const KEY_DB_STORE = 'identity';
+const TRUSTED_KEYS_STORAGE = 'securechat_trusted_public_keys';
 
 const el = {
   authView: document.getElementById('auth-view'),
@@ -13,6 +17,7 @@ const el = {
   email: document.getElementById('email'),
   otp: document.getElementById('otp'),
   senderEmail: document.getElementById('sender-email'),
+  ownFingerprint: document.getElementById('own-fingerprint'),
   recipientEmail: document.getElementById('recipient-email'),
   messageText: document.getElementById('message-text'),
   messages: document.getElementById('messages'),
@@ -49,9 +54,15 @@ function showChatView() {
   el.authView.classList.add('is-hidden');
   el.chatView.classList.remove('is-hidden');
   setStatus('Messaging ready', 'success');
+  updateOwnFingerprint();
   if (!el.messages.children.length) {
     el.messages.innerHTML = '<div class="message-card"><div class="plaintext">No messages loaded yet.</div></div>';
   }
+}
+
+async function updateOwnFingerprint() {
+  if (!el.ownFingerprint || !state.publicJwk) return;
+  el.ownFingerprint.textContent = await publicKeyFingerprint(state.publicJwk);
 }
 
 function arrayBufferToBase64(buffer) {
@@ -68,8 +79,95 @@ function base64ToArrayBuffer(base64) {
   return bytes.buffer;
 }
 
+function openKeyDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(KEY_DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(KEY_DB_STORE);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storePrivateKey(privateKey) {
+  const db = await openKeyDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KEY_DB_STORE, 'readwrite');
+    tx.objectStore(KEY_DB_STORE).put(privateKey, 'privateKey');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadPrivateKey() {
+  const db = await openKeyDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KEY_DB_STORE, 'readonly');
+    const request = tx.objectStore(KEY_DB_STORE).get('privateKey');
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function clearPrivateKey() {
+  const db = await openKeyDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KEY_DB_STORE, 'readwrite');
+    tx.objectStore(KEY_DB_STORE).delete('privateKey');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function publicKeyFingerprint(publicKeyJson) {
+  const jwk = typeof publicKeyJson === 'string' ? JSON.parse(publicKeyJson) : publicKeyJson;
+  const encoded = new TextEncoder().encode(stableStringify(jwk));
+  const hash = await crypto.subtle.digest('SHA-256', encoded);
+  const hex = [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return hex.match(/.{1,4}/g).join(' ');
+}
+
+function getTrustedKeys() {
+  return JSON.parse(localStorage.getItem(TRUSTED_KEYS_STORAGE) || '{}');
+}
+
+function saveTrustedKeys(trustedKeys) {
+  localStorage.setItem(TRUSTED_KEYS_STORAGE, JSON.stringify(trustedKeys));
+}
+
+async function verifyTrustedPublicKey(email, publicKeyJson) {
+  const fingerprint = await publicKeyFingerprint(publicKeyJson);
+  const trustedKeys = getTrustedKeys();
+  const previousFingerprint = trustedKeys[email];
+
+  if (!previousFingerprint) {
+    const trusted = confirm(
+      `First secure contact with ${email}.\n\nPublic key fingerprint:\n${fingerprint}\n\nConfirm only if this matches the other user's fingerprint.`
+    );
+    if (!trusted) throw new Error('Public key was not trusted');
+    trustedKeys[email] = fingerprint;
+    saveTrustedKeys(trustedKeys);
+    return fingerprint;
+  }
+
+  if (previousFingerprint !== fingerprint) {
+    throw new Error(
+      `Public key changed for ${email}. This could mean the user changed browser, re-registered, or a key-substitution attack is happening. Verify the fingerprint before chatting.`
+    );
+  }
+
+  return fingerprint;
+}
+
 async function generateKeyPair() {
-  const keyPair = await crypto.subtle.generateKey(
+  const exportableKeyPair = await crypto.subtle.generateKey(
     {
       name: 'ECDH',
       namedCurve: 'P-256'
@@ -78,45 +176,80 @@ async function generateKeyPair() {
     ['deriveKey']
   );
 
-  const publicJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-  const privateJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+  const publicJwk = await crypto.subtle.exportKey('jwk', exportableKeyPair.publicKey);
+  const privateJwk = await crypto.subtle.exportKey('jwk', exportableKeyPair.privateKey);
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    privateJwk,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveKey']
+  );
+  const publicKey = await crypto.subtle.importKey(
+    'jwk',
+    publicJwk,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    []
+  );
 
-  state.keyPair = keyPair;
+  state.keyPair = { publicKey, privateKey };
   state.publicJwk = publicJwk;
-  state.privateJwk = privateJwk;
 
   localStorage.setItem('securechat_public_jwk', JSON.stringify(publicJwk));
-  localStorage.setItem('securechat_private_jwk', JSON.stringify(privateJwk));
+  localStorage.removeItem('securechat_private_jwk');
+  await storePrivateKey(privateKey);
+  await updateOwnFingerprint();
   setStatus('Keys generated', 'success');
 }
 
 async function loadKeysFromStorage() {
   const pub = localStorage.getItem('securechat_public_jwk');
-  const priv = localStorage.getItem('securechat_private_jwk');
-  if (!pub || !priv) return;
+  if (!pub) return;
 
   try {
     state.publicJwk = JSON.parse(pub);
-    state.privateJwk = JSON.parse(priv);
+    let privateKey = await loadPrivateKey();
+    const legacyPrivateJwk = localStorage.getItem('securechat_private_jwk');
+
+    if (!privateKey && legacyPrivateJwk) {
+      privateKey = await crypto.subtle.importKey(
+        'jwk',
+        JSON.parse(legacyPrivateJwk),
+        { name: 'ECDH', namedCurve: 'P-256' },
+        false,
+        ['deriveKey']
+      );
+      await storePrivateKey(privateKey);
+      localStorage.removeItem('securechat_private_jwk');
+    }
+
+    if (!privateKey) return;
+
     state.keyPair = {
       publicKey: await crypto.subtle.importKey('jwk', state.publicJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []),
-      privateKey: await crypto.subtle.importKey('jwk', state.privateJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey'])
+      privateKey
     };
   } catch {
     localStorage.removeItem('securechat_public_jwk');
     localStorage.removeItem('securechat_private_jwk');
     localStorage.removeItem('securechat_email');
+    localStorage.removeItem('securechat_session_token');
+    await clearPrivateKey().catch(() => {});
     state.publicJwk = null;
-    state.privateJwk = null;
     state.keyPair = null;
+    state.sessionToken = '';
     setStatus('Register again', 'warn');
   }
 }
 
 async function api(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options
+    ...options,
+    headers
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || data.message || 'Request failed');
@@ -144,10 +277,12 @@ async function verifyAndRegister() {
   }
 
   setStatus('Verifying identity...', 'idle');
-  await api('/api/auth/verify-otp', {
+  const verification = await api('/api/auth/verify-otp', {
     method: 'POST',
     body: JSON.stringify({ email, code })
   });
+  state.sessionToken = verification.session_token;
+  localStorage.setItem('securechat_session_token', verification.session_token);
 
   await api('/api/auth/register', {
     method: 'POST',
@@ -211,6 +346,7 @@ async function sendMessage() {
   if (!state.publicJwk) return alert('Generate and register keys first');
 
   const keyLookup = await api(`/api/users/${encodeURIComponent(recipient)}/public-key`);
+  await verifyTrustedPublicKey(recipient, keyLookup.public_key);
   const encrypted = await encryptForRecipient(message, keyLookup.public_key);
 
   await api('/api/messages/send', {
@@ -257,10 +393,11 @@ async function fetchMessages() {
 
   for (const msg of messages) {
     try {
+      await verifyTrustedPublicKey(msg.sender, msg.sender_public_key);
       const plaintext = await decryptMessage(msg.ciphertext, msg.iv, msg.sender_public_key);
       el.messages.appendChild(renderMessageCard(msg, plaintext));
-    } catch {
-      el.messages.appendChild(renderMessageCard(msg, '[Decryption failed - wrong private key or tampered data]'));
+    } catch (err) {
+      el.messages.appendChild(renderMessageCard(msg, `[Decryption blocked - ${err.message}]`));
     }
   }
   setStatus('Messages decrypted locally', 'success');
@@ -292,6 +429,8 @@ async function bootstrap() {
   initTheme();
   await loadKeysFromStorage();
   const savedEmail = localStorage.getItem('securechat_email');
+  const savedToken = localStorage.getItem('securechat_session_token');
+  if (savedToken) state.sessionToken = savedToken;
   if (savedEmail) {
     state.email = savedEmail;
     el.email.value = savedEmail;
