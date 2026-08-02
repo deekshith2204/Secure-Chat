@@ -44,6 +44,13 @@ def test_health():
     assert res.status_code == 200
     assert res.json()["e2e_encrypted"] is True
 
+
+def test_security_headers_are_set():
+    res = client.get("/api/health")
+    assert res.headers["x-content-type-options"] == "nosniff"
+    assert res.headers["x-frame-options"] == "DENY"
+    assert "default-src 'self'" in res.headers["content-security-policy"]
+
 def test_request_otp(monkeypatch):
     """OTP request should succeed for any email in dev mode."""
     monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
