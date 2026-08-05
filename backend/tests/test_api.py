@@ -34,6 +34,13 @@ app.dependency_overrides[get_db] = override_get_db
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def clear_rate_limits():
+    main.RATE_LIMIT_BUCKETS.clear()
+    yield
+    main.RATE_LIMIT_BUCKETS.clear()
+
+
 def auth_headers(email: str):
     return {"Authorization": f"Bearer {main.create_session_token(email)}"}
 
@@ -58,6 +65,19 @@ def test_request_otp(monkeypatch):
     res = client.post("/api/auth/request-otp", json={"email": "test@example.com"})
     assert res.status_code == 200
     assert "OTP sent" in res.json()["message"]
+
+def test_request_otp_is_rate_limited(monkeypatch):
+    """Repeated OTP requests for the same email/IP should be rate limited."""
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.delenv("SENDGRID_FROM", raising=False)
+
+    for _ in range(main.OTP_REQUEST_LIMIT):
+        res = client.post("/api/auth/request-otp", json={"email": "limit@example.com"})
+        assert res.status_code == 200
+
+    limited = client.post("/api/auth/request-otp", json={"email": "limit@example.com"})
+    assert limited.status_code == 429
+    assert "Retry-After" in limited.headers
 
 def test_request_otp_rejects_invalid_email():
     """OTP should not be created for invalid email addresses."""
@@ -142,3 +162,4 @@ def test_messages_require_session():
 
     fetch_res = client.get("/api/messages/alice%40example.com")
     assert fetch_res.status_code == 401
+

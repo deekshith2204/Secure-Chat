@@ -1,6 +1,6 @@
 
 
-from fastapi import FastAPI, HTTPException, Depends, Header, status
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -18,6 +18,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -32,6 +33,13 @@ load_dotenv(BASE_DIR / ".env")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./securechat.db")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "securechat-dev-session-secret")
 SESSION_TTL_HOURS = int(os.getenv("SESSION_TTL_HOURS", "8"))
+OTP_REQUEST_LIMIT = int(os.getenv("OTP_REQUEST_LIMIT", "5"))
+OTP_VERIFY_LIMIT = int(os.getenv("OTP_VERIFY_LIMIT", "10"))
+PUBLIC_READ_LIMIT = int(os.getenv("PUBLIC_READ_LIMIT", "60"))
+PROTECTED_API_LIMIT = int(os.getenv("PROTECTED_API_LIMIT", "120"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "900"))
+API_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_BUCKETS = {}
 
 engine = create_engine(
     DATABASE_URL,
@@ -201,6 +209,39 @@ def require_same_email(current_email: str, requested_email: str):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session does not match requested email.")
 
 
+def get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def check_rate_limit(scope: str, key: str, limit: int, window_seconds: int):
+    now = time.monotonic()
+    bucket_key = f"{scope}:{key}"
+    attempts = [ts for ts in RATE_LIMIT_BUCKETS.get(bucket_key, []) if now - ts < window_seconds]
+
+    if len(attempts) >= limit:
+        retry_after = max(1, int(window_seconds - (now - attempts[0])))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many requests. Try again in {retry_after} seconds.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    attempts.append(now)
+    RATE_LIMIT_BUCKETS[bucket_key] = attempts
+
+
+def limit_by_ip_and_email(request: Request, scope: str, email: str, limit: int, window_seconds: int):
+    normalized_email = email.lower().strip()
+    check_rate_limit(scope, f"{get_client_ip(request)}:{normalized_email}", limit, window_seconds)
+
+
+def limit_by_ip(request: Request, scope: str, limit: int, window_seconds: int):
+    check_rate_limit(scope, get_client_ip(request), limit, window_seconds)
+
+
 # ─────────────────────────────────────────────
 # Pydantic Schemas
 # ─────────────────────────────────────────────
@@ -300,12 +341,13 @@ def send_otp_email(email: str, code: str):
 # ─────────────────────────────────────────────
 
 @app.post("/api/auth/request-otp", summary="Step 1: Request OTP for email verification")
-def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
+def request_otp(req: OTPRequest, request: Request, db: Session = Depends(get_db)):
     """
     Sends a 6-digit OTP to the provided email.
-    Rate limiting should be applied at the reverse proxy or hosting platform level.
+    Application-level rate limiting is applied per IP/email; a proxy-level limiter can also be added in production.
     Security note: identical response for known/unknown emails (prevents enumeration).
     """
+    limit_by_ip_and_email(request, "otp-request", req.email, OTP_REQUEST_LIMIT, RATE_LIMIT_WINDOW_SECONDS)
     code = generate_otp()
     expires_at = datetime.utcnow() + timedelta(minutes=10)
 
@@ -330,10 +372,11 @@ def request_otp(req: OTPRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/api/auth/verify-otp", summary="Step 2: Verify OTP code")
-def verify_otp(req: OTPVerifyRequest, db: Session = Depends(get_db)):
+def verify_otp(req: OTPVerifyRequest, request: Request, db: Session = Depends(get_db)):
     """
     Validates OTP and returns a signed session token for this email.
     """
+    limit_by_ip_and_email(request, "otp-verify", req.email, OTP_VERIFY_LIMIT, RATE_LIMIT_WINDOW_SECONDS)
     if not req.code.isdigit() or len(req.code) != 6:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
 
@@ -391,13 +434,14 @@ def register(
 
 @app.get("/api/users/{email}/public-key", response_model=PublicKeyResponse,
          summary="Lookup a user's public key by email")
-def get_public_key(email: str, db: Session = Depends(get_db)):
+def get_public_key(email: str, request: Request, db: Session = Depends(get_db)):
     """
     Returns the registered public key for an email address.
     Used by sender to encrypt a message before sending.
     VULNERABILITY NOTE: This is the MITM attack surface — a malicious server
     could return a different public key. Mitigated by key fingerprint verification.
     """
+    limit_by_ip(request, "public-key", PUBLIC_READ_LIMIT, API_RATE_LIMIT_WINDOW_SECONDS)
     user = db.query(User).filter(User.email == email, User.verified == True).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found or not verified.")
@@ -407,6 +451,7 @@ def get_public_key(email: str, db: Session = Depends(get_db)):
 @app.post("/api/messages/send", summary="Send an encrypted message (relay only)")
 def send_message(
     req: SendMessageRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_email: str = Depends(get_current_email),
 ):
@@ -415,6 +460,7 @@ def send_message(
     Ciphertext encrypted in the browser before this call.
     AES-GCM provides: confidentiality + integrity (auth tag detects tampering).
     """
+    limit_by_ip_and_email(request, "message-send", req.sender_email, PROTECTED_API_LIMIT, API_RATE_LIMIT_WINDOW_SECONDS)
     require_same_email(current_email, req.sender_email)
 
     sender = db.query(User).filter(
@@ -446,6 +492,7 @@ def send_message(
 @app.get("/api/messages/{email}", summary="Fetch encrypted messages for a user")
 def get_messages(
     email: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_email: str = Depends(get_current_email),
 ):
@@ -454,6 +501,7 @@ def get_messages(
     Client-side JavaScript decrypts using private key from IndexedDB.
     Server never performs decryption.
     """
+    limit_by_ip_and_email(request, "message-fetch", email, PROTECTED_API_LIMIT, API_RATE_LIMIT_WINDOW_SECONDS)
     require_same_email(current_email, email)
 
     messages = db.query(Message).filter(
@@ -490,3 +538,4 @@ def health():
 # ─────────────────────────────────────────────
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+

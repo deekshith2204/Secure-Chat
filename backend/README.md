@@ -34,7 +34,7 @@ SENDGRID_FROM=dthadvai@gmail.com
 ```
 
 Use Twilio SendGrid's HTTPS Mail Send API for deployed OTP email delivery.
-`SESSION_SECRET` signs the browser session token returned after OTP verification.
+`SESSION_SECRET` signs the browser session token returned after OTP verification. Rate-limit variables control OTP and API abuse protection.
 
 ## Security Notes
 
@@ -42,3 +42,4 @@ Use Twilio SendGrid's HTTPS Mail Send API for deployed OTP email delivery.
 - Private keys NEVER leave the browser
 - AES-GCM provides confidentiality + integrity (auth tag)
 - Key distribution is the MITM attack surface (document in vulnerability analysis)
+

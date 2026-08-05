@@ -281,6 +281,7 @@ The current backend test suite checks:
 - Unknown user lookup rejection
 - Register and public-key lookup flow
 - Registration blocked until OTP is verified
+- OTP rate-limit behavior returns HTTP 429 after repeated requests
 
 ## Security Features
 
@@ -318,6 +319,7 @@ The current backend test suite checks:
 | Browser script injection risk | If unwanted JavaScript runs in the page, it could try to act as the user. | The backend now sends a restrictive Content Security Policy, blocks framing, restricts browser permissions, and the frontend no longer loads third-party font resources. |
 | Cloud database persistence | SQLite is easy for demos but can lose data on cloud restarts. | SQLite is used for simple demos, while the code supports PostgreSQL through `DATABASE_URL` for more reliable deployment. |
 | Testing after provider changes | Changing from Resend/SMTP to SendGrid could break OTP behavior. | Tests were updated to clear `SENDGRID_*` variables for dev mode, and the backend test suite was run successfully. |
+| Brute-force and API abuse | Attackers could repeatedly request OTPs, guess OTPs, or scrape public endpoints. | In-memory IP/email rate limits now protect OTP request, OTP verification, public-key lookup, message send, and message fetch routes. |
 
 ## Known Limitations
 
@@ -326,7 +328,7 @@ The current backend test suite checks:
 | Public-key substitution | A malicious or compromised server could return the wrong public key. | The app now uses trust-on-first-use fingerprints, displays the user's fingerprint, stores trusted contact fingerprints, and blocks changed keys. Users should compare fingerprints out of band for high-trust conversations. |
 | Browser storage loss | If the browser data is cleared, the private key is lost. | Add encrypted private-key backup protected by a user password. |
 | Device change | A new browser creates a new private key and may not decrypt old messages. | Add controlled key recovery or key rotation. |
-| OTP brute force | Attackers could try repeated OTP guesses. | Add rate limiting per email and IP address. |
+| OTP brute force | Attackers could try repeated OTP guesses. | OTP request and verification routes now use IP/email-based rate limits and return HTTP 429 when exceeded. |
 | Session token theft | If an attacker steals a valid browser token, they could act as that user until it expires. | Tokens expire, and `SESSION_SECRET` signs them. Future work should add logout, token revocation, secure cookies, and shorter expiry options. |
 | No advanced forward secrecy | Long-term key compromise could affect older messages. | Add session keys or a ratcheting protocol. |
 | Open CORS in development | `allow_origins=["*"]` is too broad for production. | Restrict CORS to the deployed frontend domain. |
@@ -337,7 +339,6 @@ The current backend test suite checks:
 
 - Add stronger out-of-band safety-number verification for fingerprints.
 - Add signed key transparency or append-only key history for stronger public-key auditing.
-- Add rate limiting for OTP request and verification endpoints.
 - Add PostgreSQL for persistent production deployment.
 - Add encrypted private-key backup and recovery.
 - Add stronger session authentication after OTP verification.
@@ -358,4 +359,5 @@ The current backend test suite checks:
 8. Confirm that the message decrypts only in the receiver's browser.
 
 Use separate browser profiles for different users because each browser stores its own private key.
+
 
